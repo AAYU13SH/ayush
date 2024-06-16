@@ -5,7 +5,7 @@ from telebot import types
 import time
 
 # Replace 'YOUR_TOKEN' with your actual Telegram Bot token
-bot = telebot.TeleBot("7167579834:AAFmpwPdKHT6eE4aELSOB8CC8gi_tPrutPA")
+bot = telebot.TeleBot("7167579834:gAAFmpwPdKHT6eE4aELSOB8CC8gi_tPrutPA")
 
 # Dictionary to store whether a user has joined each group
 user_groups = {}
@@ -95,31 +95,7 @@ active_users = []
 # Admin IDs
 admin_ids = ["6882194604", "6843210459"]
 
-# Handler for /users command
-@bot.message_handler(commands=['users'])
-def handle_users(message):
-    if str(message.from_user.id) in banned_users:
-        bot.reply_to(message, "YOU ARE BANNED")
-    else:
-        user_id = message.from_user.id
-        if str(user_id) in admin_ids:
-            num_users = len(started_users)
-            bot.send_message(message.chat.id, f"Total users who started the bot: {num_users}")
-        else:
-            bot.send_message(message.chat.id, "You are not authorized to use this command.")
-
-@bot.message_handler(commands=['natures'])
-def handle_natures(message):
-    if str(message.from_user.id) in banned_users:
-        bot.reply_to(message, "YOU ARE BANNED")
-    else:
-        # Replace 'nature.jpg' with the path to your nature photo
-        photo = open('https://telegra.ph//file/a5709331d1e08445ee317.jpg', 'rb')
-        bot.send_photo(message.chat.id, photo)
-        photo.close()
-
-admin_id = [6882194604, 6843210459]
-
+# Handler for /users 
 # Handler for /msg command
 @bot.message_handler(commands=['msg'])
 def handle_msg(message):
