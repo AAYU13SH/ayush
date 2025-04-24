@@ -13,7 +13,7 @@ from pymongo import MongoClient, ReturnDocument # Import pymongo
 from datetime import datetime # For timestamping user registration
 
 # --- Bot Configuration ---
-BOT_TOKEN = "7906407273:AAHe77DY7TI9gmzsH-UM6k1vB9xDLRa_534" # Replace with your bot token
+BOT_TOKEN = "7870704761:AAH-RMKO7chV0nu6-o5wUYFiat7XwBW6OCk" # Replace with your bot token
 if BOT_TOKEN == "YOUR_BOT_TOKEN" or not BOT_TOKEN:
     print("ERROR: Please replace 'YOUR_BOT_TOKEN' with your actual bot token.")
     exit()
