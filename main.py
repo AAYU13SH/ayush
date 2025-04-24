@@ -1,564 +1,591 @@
-#6882194604
+# --- START OF FULLY REVISED FILE with MongoDB & Ball Count (v4) ---
 
 import telebot
-from telebot import types
-import time
+from telebot import types # For Inline Keyboards
+import random
+import logging
+from uuid import uuid4
+import os
+import html
+import urllib.parse
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, ReplyParameters, LinkPreviewOptions # Added new types
+from pymongo import MongoClient, ReturnDocument # Import pymongo
+from datetime import datetime # For timestamping user registration
 
-# Replace 'YOUR_TOKEN' with your actual Telegram Bot token
-bot = telebot.TeleBot("7167579834:gAAFmpwPdKHT6eE4aELSOB8CC8gi_tPrutPA")
+# --- Bot Configuration ---
+BOT_TOKEN = "7870704761:AAH-RMKO7chV0nu6-o5wUYFiat7XwBW6OCk" # Replace with your bot token
+if BOT_TOKEN == "YOUR_BOT_TOKEN" or not BOT_TOKEN:
+    print("ERROR: Please replace 'YOUR_BOT_TOKEN' with your actual bot token.")
+    exit()
 
-# Dictionary to store whether a user has joined each group
-user_groups = {}
+# --- MongoDB Configuration ---
+MONGO_URI = "mongodb+srv://yesvashisht:yash2005@clusterdf.yagj9ok.mongodb.net/?retryWrites=true&w=majority&appName=Clusterdf" # Replace with your MongoDB URI
+MONGO_DB_NAME = "tct_cricket_bot_db"
+if MONGO_URI == "YOUR_MONGODB_URI" or not MONGO_URI:
+     print("ERROR: Please configure MONGO_URI.")
+     # exit()
 
-started_users = set()
+bot = telebot.TeleBot(BOT_TOKEN)
 
-# List to store banned user IDs
-banned_users = set()
+# --- Admin Configuration ---
+xmods = [6293455550, 6265981509]
 
-# Handler for /start command
+# --- Database Setup ---
+try:
+    client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000) # Added timeout
+    client.admin.command('ping')
+    db = client[MONGO_DB_NAME]
+    users_collection = db.users
+    print("Successfully connected to MongoDB and pinged the deployment.")
+except Exception as e:
+    print(f"ERROR: Could not connect to MongoDB at {MONGO_URI}.")
+    print(f"Error details: {e}")
+    users_collection = None
+    print("Warning: Bot running without database persistence.")
+
+
+# --- Cricket Game States ---
+STATE_WAITING = "WAITING"
+STATE_TOSS = "TOSS"
+STATE_BAT_BOWL = "BAT_BOWL"
+STATE_P1_BAT = "P1_BAT"
+STATE_P1_BOWL_WAIT = "P1_BOWL_WAIT"
+STATE_P2_BAT = "P2_BAT"
+STATE_P2_BOWL_WAIT = "P2_BOWL_WAIT"
+
+# --- In-memory storage for active games ---
+games = {}
+
+# --- Logging ---
+logger = telebot.logger
+telebot.logger.setLevel(logging.INFO)
+
+# --- Helper Functions --- (Unchanged from previous version)
+def get_player_name_telebot(user):
+    if user is None: return "Unknown Player"
+    name = user.first_name
+    if user.last_name: name += f" {user.last_name}"
+    if not name and user.username: name = f"@{user.username}"
+    if not name: name = f"User_{user.id}"
+    return name
+
+def create_standard_keyboard_telebot(game_id, buttons_per_row=3):
+    markup = types.InlineKeyboardMarkup(row_width=buttons_per_row)
+    buttons = [types.InlineKeyboardButton(str(i), callback_data=f"num:{i}:{game_id}") for i in range(1, 7)]
+    markup.add(*buttons)
+    return markup
+
+def cleanup_game_telebot(game_id, chat_id, reason="ended", edit_markup=True):
+    logger.info(f"Cleaning up game {game_id} in chat {chat_id} (Reason: {reason})")
+    game_data = games.pop(game_id, None)
+    if game_data and game_data.get('message_id') and edit_markup:
+        if reason != "finished normally":
+            try:
+                bot.edit_message_reply_markup(chat_id=chat_id, message_id=game_data['message_id'], reply_markup=None)
+            except Exception as e:
+                if "message is not modified" not in str(e) and "message to edit not found" not in str(e):
+                    logger.error(f"Could not edit reply markup for game {game_id} on cleanup: {e}")
+
+# --- Database Helper Functions --- (Unchanged from previous version)
+def get_user_data(user_id_str):
+    if users_collection is None: return None
+    try: return users_collection.find_one({"_id": user_id_str})
+    except Exception as e: logger.error(f"DB error fetching user {user_id_str}: {e}"); return None
+
+def register_user(user: types.User):
+    if users_collection is None: return False
+    user_id_str = str(user.id); now = datetime.utcnow()
+    user_doc = {"$set": {"full_name": user.full_name, "username": user.username, "last_seen": now},
+                "$setOnInsert": {"_id": user_id_str, "runs": 0, "wickets": 0, "achievements": [], "registered_at": now}}
+    try:
+        result = users_collection.update_one({"_id": user_id_str}, user_doc, upsert=True)
+        return result.upserted_id is not None or result.matched_count > 0
+    except Exception as e: logger.error(f"DB error registering user {user_id_str}: {e}"); return False
+
+def add_runs_to_user(user_id_str, runs_to_add):
+    if users_collection is None or runs_to_add <= 0: return False
+    try:
+        result = users_collection.update_one({"_id": user_id_str}, {"$inc": {"runs": runs_to_add}}, upsert=False)
+        return result.matched_count > 0
+    except Exception as e: logger.error(f"DB error adding runs to user {user_id_str}: {e}"); return False
+
+def add_wicket_to_user(user_id_str):
+    if users_collection is None: return False
+    try:
+        result = users_collection.update_one({"_id": user_id_str}, {"$inc": {"wickets": 1}}, upsert=False)
+        return result.matched_count > 0
+    except Exception as e: logger.error(f"DB error adding wicket to user {user_id_str}: {e}"); return False
+
+# --- Command Handlers --- (Largely unchanged, only /start welcome text modified)
+
 @bot.message_handler(commands=['start'])
 def handle_start(message):
-    if str(message.from_user.id) in banned_users:
-        bot.reply_to(message, "YOU ARE BANNED")
-    else:
-        user_id = message.from_user.id
-        user_name = message.from_user.first_name
-        if user_groups.get(user_id, False):
-            bot.reply_to(message, "Do /cmds for commands")
-        else:
-                if not all(user_groups.get(user_id, {}).values()):
-                    bot.send_message(message.chat.id, "Please join all groups first by clicking the buttons below.")
-                else:
-                    welcome_message = ("🔸Welcome, {} To Auction Bot\n\n"
-                            "🔸You Can Submit Your Pokemon Through This Bot For Auction\n\n"
-                            "🔻But Before Using You Have To Join Our Auction Group By Clicking Below Two Buttons "
-                            "And Then Click 'Joined' Button").format(user_name)
-                markup = types.InlineKeyboardMarkup(row_width=1)
-                auction_group_button = types.InlineKeyboardButton("Join Auction Group", url="https://t.me/DBA_HEXA_AUCTION")
-                trade_group_button = types.InlineKeyboardButton("Join Trade Group", url="https://t.me/DBA_HEXA_TRADE")
-                joined_button = types.InlineKeyboardButton("Joined", callback_data="joined")
-                markup.add(auction_group_button, trade_group_button, joined_button)
-                bot.send_photo(message.chat.id, open('https://telegra.ph//file/33a7bd56c58e085ddbee4.jpg', 'rb'), caption=welcome_message, reply_markup=markup)
-                user_id = message.from_user.id
-                started_users.add(user_id)
-                user_id = message.from_user.id
-                user_ids.add(user_id)
-
-# Handler for 'Joined' button callback
-@bot.callback_query_handler(func=lambda call: call.data == "joined")
-def joined_callback(call):
-    user_id = call.from_user.id
-    if user_id not in user_groups:
-        user_groups[user_id] = {}
-    user_groups[user_id][call.message.chat.id] = True
-    bot.answer_callback_query(call.id, "Thanks for joining our group")
-
-# Handler for /cmds command
-@bot.message_handler(commands=['cmds'])
-def handle_cmds(message):
-    if str(message.from_user.id) in banned_users:
-        bot.reply_to(message, "YOU ARE BANNED")
-    else:
-        user_id = message.from_user.id
-        if user_groups.get(user_id, False):
-            bot.reply_to(message, '''
-                     USER COMMANDS : - 
-
-/start - Start The Bot
-/add - Send Poke / TMs For Auction
-/cancel - Cancel All Running Cmds
-/item - List Of All Items In Auc
-/natures - Get Natures Page 
-/cmds - Get This Message
-                     
-ADMINS COMMANDS : - 
-                     
-/users - Get All Bot Users List
-/list - Get List Of All Items In Auction 
-/ban - Ban Any User
-/unban - Unban Any User
-/msg - Send Message To User
-/approve - Make Someone Bot Admin
-/broad - Send Message To All Bot 
-/next - Send Next Item In Auction
-/unapprove - Remove Someone Bot Admin
-                     
-OWNER COMMANDS :-
-
-/clear - For Bot Owner''')
-        else:
-            bot.reply_to(message, "Please join our groups first by clicking the buttons in the start message.")
-
-# List to store active user IDs
-active_users = []
-
-# Admin IDs
-admin_ids = ["6882194604", "6843210459"]
-
-# Handler for /users 
-# Handler for /msg command
-@bot.message_handler(commands=['msg'])
-def handle_msg(message):
-    # Check if the user is an admin
-    if message.from_user.id not in admin_id:
-        bot.reply_to(message, "You are not authorized to use this command.")
+    if message.chat.type != 'private':
+         bot.reply_to(message, "Welcome! Use /cricket in a group to play. Use /start in my DM to register for stats.")
+         return
+    if users_collection is None:
+         bot.reply_to(message, "DB connection unavailable. Registration disabled.")
+         return
+    user = message.from_user; user_id_str = str(user.id)
+    mention = f"[{user.full_name}](tg://user?id={user_id_str})"
+    if get_user_data(user_id_str):
+        register_user(user) # Update details
+        bot.reply_to(message, f"{mention}, you are already registered!", parse_mode='markdown')
         return
+    if register_user(user):
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton('Channel', url='https://t.me/TCTCRICKET'),
+                   InlineKeyboardButton('Group', url='https://t.me/+SIzIYQeMsRsyOWM1'))
+        welcome_text = f"Welcome {mention} to the TCT OFFICIAL BOT!\nYou are now registered.\nUse /help for commands."
+        bot.send_message(message.chat.id, welcome_text, parse_mode='markdown', reply_markup=markup,
+                         link_preview_options=LinkPreviewOptions(is_disabled=True))
+        logger.info(f"New user registered: {user.full_name} ({user_id_str})")
+        try: # Notify admin
+            if xmods: bot.send_message(xmods[0], f"➕ New user: {mention} (`{user_id_str}`)", parse_mode='markdown', link_preview_options=LinkPreviewOptions(is_disabled=True))
+        except Exception as e: logger.error(f"Could not notify admin: {e}")
+    else: bot.reply_to(message, "⚠️ Error during registration.")
 
-    # Extract user ID and message from the command
+@bot.message_handler(commands=['help'])
+def help_command(message):
+    is_admin = message.from_user.id in xmods
+    user_commands = """*User Commands:*
+  `/start` - Register (in DM).
+  `/help` - This help message.
+  `/cricket` - Start game (in group).
+  `/cancel` - Cancel your game (in group).
+  `/my_achievement` - View stats (reply or DM).
+  `/lead_runs` - Top 5 run scorers.
+  `/lead_wickets` - Top 5 wicket takers."""
+    admin_commands = """*Admin Commands:*
+  `/achieve <user_id> <title>` - Add achievement (or reply).
+  `/remove_achievement <user_id> <title>` - Remove achievement (or reply).
+  `/broad <message>` - Broadcast (or reply).
+  `/reduce_runs <user_id> <amount>` - Reduce runs (or reply).
+  `/reduce_wickets <user_id> <amount>` - Reduce wickets (or reply).
+  `/clear_all_stats` - Reset all stats.
+  `/user_count` - Show registered users."""
+    help_text = "📜 *Available Commands*\n" + user_commands
+    if is_admin: help_text += "\n\n" + admin_commands
+    bot.reply_to(message, help_text, parse_mode='Markdown')
+
+@bot.message_handler(commands=['cricket'])
+def start_cricket(message):
+    user = message.from_user; user_id_str = str(user.id)
+    if users_collection is not None and not get_user_data(user_id_str):
+         return bot.reply_to(message, f"@{get_player_name_telebot(user)}, please /start me in DM first.")
+    elif users_collection is None: logger.warning(f"Game start by {user_id_str} while DB is down.")
+    chat_id = message.chat.id; player1_name = get_player_name_telebot(user)
+    logger.info(f"User {player1_name} ({user.id}) initiated /cricket in chat {chat_id}")
+    # Check existing/active games...
+    for gid, gdata in list(games.items()):
+        if gdata['chat_id'] == chat_id:
+            p1_id = gdata.get('player1', {}).get('id'); p2_id = gdata.get('player2', {}).get('id')
+            if gdata['state'] == STATE_WAITING and p1_id == user.id: return bot.reply_to(message, "You already started a game. Use /cancel.")
+            if user.id == p1_id or user.id == p2_id: return bot.reply_to(message, "You are already in a game! Use /cancel.")
+    # Create game...
+    game_id = str(uuid4())
+    game_data = { # Added ball_count
+        'chat_id': chat_id, 'message_id': None, 'state': STATE_WAITING,
+        'player1': {'id': user.id, 'name': player1_name, 'user_obj': user},
+        'player2': None, 'p1_score': 0, 'p2_score': 0, 'innings': 1,
+        'current_batter': None, 'current_bowler': None, 'toss_winner': None,
+        'p1_toss_choice': None, 'batter_choice': None, 'target': None,
+        'ball_count': 0 # Initialize ball count
+    }
+    games[game_id] = game_data
+    logger.info(f"Created game {game_id} for {player1_name} in chat {chat_id}")
+    markup = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("Join Game", callback_data=f"join:_:{game_id}"))
     try:
-        _, user_id, user_message = message.text.split(maxsplit=2)
-        user_id = int(user_id)
-    except ValueError:
-        bot.reply_to(message, "Invalid syntax. Use /msg (user_id) (message)")
-        return
+        sent_message = bot.send_message(chat_id, f"🏏 Cricket game by {player1_name}!\nWaiting for P2...", reply_markup=markup)
+        games[game_id]["message_id"] = sent_message.message_id
+    except Exception as e: logger.error(f"Failed send cricket msg game {game_id}: {e}"); games.pop(game_id, None)
 
-    # Send the message if the user exists
-    try:
-        bot.send_message(user_id, user_message)
-        bot.reply_to(message, f"Message sent to user {user_id}")
-    except Exception as e:
-        bot.reply_to(message, f"Failed to send message to user {user_id}: {e}")
-
-# Set to store user IDs
-user_ids = set()
-
-# Handler for /broad command (for admin only)
-@bot.message_handler(commands=['broad'])
-def handle_broad(message):
-    if str(message.from_user.id) not in admin_ids:
-        bot.reply_to(message, "You are not authorized to use this command.")
-        return
-
-    # Extract message from the command
-    try:
-        _, broad_message = message.text.split(maxsplit=1)
-    except ValueError:
-        bot.reply_to(message, "Invalid syntax. Use /broad (message)")
-        return
-
-    # Forward the message to all users
-    for user_id in user_ids:
-        try:
-            bot.send_message(user_id, broad_message)
-        except Exception as e:
-            print(f"Failed to send message to user {user_id}: {e}")
-
-    bot.reply_to(message, "Message forwarded to all users.")
-
-# Handler for /approve command (for admin only)
-@bot.message_handler(commands=['approve'])
-def handle_approve(message):
-    if str(message.from_user.id) not in admin_ids:
-        bot.reply_to(message, "You are not authorized to use this command.")
-        return
-    # Extract user ID from the command
-    try:
-        _, user_id = message.text.split(maxsplit=1)
-        admin_ids.append(user_id)  # Add the new admin ID to the list of admin IDs (in string form)
-        admin_id.append(int(user_id))  # Add the new admin ID to the list of admin IDs (in integer form)
-        bot.reply_to(message, f"User with ID {user_id} has been successfully added to admin list.")
-    except ValueError:
-        bot.reply_to(message, "Invalid syntax. Use /approve <user_id>")
-
-# Handler for /ban command (for admin only)
-@bot.message_handler(commands=['ban'])
-def handle_ban(message):
-    if str(message.from_user.id) not in admin_ids:
-        bot.reply_to(message, "You are not authorized to use this command.")
-        return
-
-    # Extract user ID from the command
-    try:
-        _, user_id = message.text.split(maxsplit=1)
-        banned_users.add(user_id)  # Add the user ID to the set of banned users
-        bot.reply_to(message, f"User with ID {user_id} has been banned.")
-    except ValueError:
-        bot.reply_to(message, "Invalid syntax. Use /ban <user_id>")
-
-# Handler for /unban command (for admin only)
-@bot.message_handler(commands=['unban'])
-def handle_unban(message):
-    if str(message.from_user.id) not in admin_ids:
-        bot.reply_to(message, "You are not authorized to use this command.")
-        return
-
-    # Extract user ID from the command
-    try:
-        _, user_id = message.text.split(maxsplit=1)
-        if user_id in banned_users:
-            banned_users.remove(user_id)  # Remove the user ID from the set of banned users
-            bot.reply_to(message, f"User with ID {user_id} has been unbanned.")
-        else:
-            bot.reply_to(message, f"User with ID {user_id} is not banned.")
-    except ValueError:
-        bot.reply_to(message, "Invalid syntax. Use /unban <user_id>")
-
-# Handler for /unapprove command (for admin only)
-@bot.message_handler(commands=['unapprove'])
-def handle_unapprove(message):
-    if str(message.from_user.id) not in admin_ids:
-        bot.reply_to(message, "You are not authorized to use this command.")
-        return
-
-    # Extract user ID from the command
-    try:
-        _, user_id = message.text.split(maxsplit=1)
-        if user_id in admin_ids:
-            admin_ids.remove(user_id)  # Remove the user ID from the list of admin IDs (string form)
-            admin_id.remove(int(user_id))  # Remove the user ID from the set of admin IDs (int form)
-            bot.reply_to(message, f"User with ID {user_id} has been removed from the admin list.")
-        else:
-            bot.reply_to(message, f"User with ID {user_id} is not an admin.")
-    except ValueError:
-        bot.reply_to(message, "Invalid syntax. Use /unapprove <user_id>")
-
-# Define a dictionary to store the counts of different item categories
-item_counts = {
-    "legendary": 0,
-    "non_legendary": 0,
-    "shiny": 0,
-    "tms": 0,
-    "teams": 0,
-    "total_items": 0
-}
-
-# Check if the user is an admin
-def is_admin(user_id):
-    return user_id in admin_id
-
-# Define the /item command handler
-@bot.message_handler(commands=['item'])
-def item(message):
-    response = "🔹Currently Items In Auction - \n"
-    response += "🔺Legendary: " + str(item_counts["legendary"]) + "\n"
-    response += "🔺Non-Legendary: " + str(item_counts["non_legendary"]) + "\n"
-    response += "🔺Shiny: " + str(item_counts["shiny"]) + "\n"
-    response += "🔺TMs: " + str(item_counts["tms"]) + "\n"
-    response += "🔺Teams: " + str(item_counts["teams"]) + "\n"
-    response += "\n🔹Total Items: " + str(item_counts["total_items"]) + "\n"
-
-    bot.reply_to(message, response)
-
-# Define the command handlers for adding items to different categories
-def add_item(message, category):
-    user_id = message.from_user.id
-    if is_admin(user_id):
-        item_counts[category] += 1
-        item_counts["total_items"] += 1
-        bot.reply_to(message, f"Added 1 item to {category.capitalize()} category.")
-    else:
-        bot.reply_to(message, "Only admins can perform this action.")
-
-@bot.message_handler(commands=['legendary'])
-def add_legendary(message):
-    add_item(message, "legendary")
-
-@bot.message_handler(commands=['non_legendary'])
-def add_non_legendary(message):
-    add_item(message, "non_legendary")
-
-@bot.message_handler(commands=['shiny'])
-def add_shiny(message):
-    add_item(message, "shiny")
-
-@bot.message_handler(commands=['tms'])
-def add_tms(message):
-    add_item(message, "tms")
-
-@bot.message_handler(commands=['teams'])
-def add_teams(message):
-    add_item(message, "teams")
-
-# Define a dictionary to store the items in each category
-approved_items = {
-    "legendary": [],
-    "non_legendary": [],
-    "shiny": [],
-    "tms": [],
-    "teams": []
-}
-
-# Check if the user is an admin
-def is_admin(user_id):
-    return user_id in admin_id
-
-# Define the ID of the group to send messages to
-group_id = -1002041160221 # Replace this with the ID of your group
-
-# Check if the user is an admin
-def is_admin(user_id):
-    return user_id in admin_id
-
-# Define the /send command handler
-@bot.message_handler(commands=['send'])
-def send_message_prompt(message):
-    if is_admin(message.from_user.id):
-        bot.reply_to(message, "Type the message to send in the group")
-        bot.register_next_step_handler(message, send_message)
-    else:
-        bot.reply_to(message, "Only admins can perform this action.")
-
-# Define the function to send or forward the message to the group
-def send_message(message):
-    if message.forward_from or message.forward_from_chat:
-        forwarded_message = message
-    else:
-        forwarded_message = message.text
-    try:
-        bot.forward_message(group_id, message.chat.id, message.id)
-        bot.send_message(message.chat.id, "Message sent successfully.")
-    except Exception as e:
-        bot.send_message(message.chat.id, f"Failed to send message: {e}")
-
-
-# Dictionary to store messages and their corresponding chat IDs
-stored_messages = {}
-
-# Define the /store command handler
-@bot.message_handler(commands=['store'])
-def store_message_prompt(message):
-    if is_admin(message.from_user.id):
-        bot.reply_to(message, "Type the message you want to store:")
-        bot.register_next_step_handler(message, store_message)
-    else:
-        bot.reply_to(message, "Only admins can perform this action.")
-
-def store_message(message):
-    stored_messages[message.message_id] = {"message": message.text, "chat_id": message.chat.id}
-    bot.reply_to(message, "Message stored successfully.")
-
-# Define the /next command handler
-@bot.message_handler(commands=['next'])
-def next_message(message):
-    if is_admin(message.from_user.id):
-        if stored_messages:
-            next_message_id = next(iter(stored_messages))
-            next_message_data = stored_messages.pop(next_message_id)
-            bot.forward_message(message.chat.id, next_message_data["chat_id"], next_message_id)
-        else:
-            bot.reply_to(message, "No more stored messages.")
-    else:
-        bot.reply_to(message, "Only admins can perform this action.")
-
-# Define the handle_dot function
-@bot.message_handler(func=lambda message: message.text == "." and (message.chat.type == "group" or message.chat.type == "supergroup") and str(message.from_user.id) in admin_ids)
-def handle_dot(message):
-    msg = bot.send_message(message.chat.id, "•")
-    time.sleep(1.5)
-    bot.edit_message_text("• •", message.chat.id, msg.message_id)
-    time.sleep(1.5)
-    bot.edit_message_text("• • •", message.chat.id, msg.message_id)
-    time.sleep(1.5)
-    keyboard = types.InlineKeyboardMarkup()
-    yes_button = types.InlineKeyboardButton(text="Yes", callback_data="sell_pokemon")
-    keyboard.add(yes_button)
-    bot.edit_message_text("Do you want to sell the Pokemon?", message.chat.id, msg.message_id, reply_markup=keyboard)
-
-# Define the sell_pokemon_callback function
-@bot.callback_query_handler(func=lambda call: call.data == "sell_pokemon")
-def sell_pokemon_callback(call):
-    bot.answer_callback_query(call.id, "Pokemon has been sold!")
-    bot.send_message(call.message.chat.id, "🔊 Pokemon Has Been Sold")
-
-# Define the handle_sold function
-@bot.message_handler(commands=['sold'])
-def handle_sold(message):
-    if is_admin(message.from_user.id):
-        try:
-            command, *args = message.text.split(' ', 1)
-            if len(args) != 1:
-                raise ValueError
-            pokemon_name = args[0]
-            username = message.reply_to_message.from_user.username
-            amount = message.reply_to_message.text
-            reply_message = f"🔊 {pokemon_name} Has Been Sold\n\n🔸Sold to - @{username}\n🔸Sold for - {amount}\n\n❗ Join Trade Group To Get Seller Username After Auction"
-            sent_message = bot.reply_to(message, reply_message)
-            bot.pin_chat_message(message.chat.id, sent_message.id)  # Pin the message
-        except ValueError:
-            bot.reply_to(message, "Please provide the command in the format /sold (pokemon name)")
-    else:
-        bot.reply_to(message, "You are not authorized to use this command.")
-
-# Define the handle_unsold function
-@bot.message_handler(commands=['unsold'])
-def handle_unsold(message):
-    if is_admin(message.from_user.id):
-        try:
-            pokemon_name = message.text.split(' ', 1)[1]
-            reply_message = f"❌ {pokemon_name} Has Been Unsold"
-            sent_message = bot.reply_to(message, reply_message)
-            bot.pin_chat_message(message.chat.id, sent_message.id)  # Pin the message
-        except IndexError:
-            bot.reply_to(message, "Please provide the name of the Pokemon to mark as unsold.")
-    else:
-        bot.reply_to(message, "You are not authorized to use this command.")
-
-# Enable privacy mode
-bot.skip_pending = True
-
-bot_owner_id = "6882194604"
-
-# Check if the user is the bot owner
-def is_bot_owner(user_id):
-    return str(user_id) == bot_owner_id
-
-# Define the /clear command handler
-@bot.message_handler(commands=['clear'])
-def clear_messages(message):
-    if is_bot_owner(message.from_user.id):
-        stored_messages.clear()
-        bot.reply_to(message, "All stored messages have been cleared.")
-    else:
-        bot.reply_to(message, "You are not authorized to use this command.")
-
-# Flag variable to indicate cancellation
-cancel_requested = False
-
-# Define the /cancel command handler
 @bot.message_handler(commands=['cancel'])
-def cancel_command(message):
-    global cancel_requested
-    cancel_requested = True
-    bot.reply_to(message, "All Running Commands Have Been Cancelled ✅")
+def cancel_cricket(message):
+    user = message.from_user; chat_id = message.chat.id; game_to_cancel_id = None
+    logger.info(f"User {get_player_name_telebot(user)} ({user.id}) /cancel in chat {chat_id}")
+    for gid, gdata in list(games.items()):
+        if gdata['chat_id'] == chat_id:
+             p1_id = gdata.get('player1', {}).get('id'); p2_id = gdata.get('player2', {}).get('id')
+             if user.id == p1_id or user.id == p2_id: game_to_cancel_id = gid; break
+    if game_to_cancel_id:
+        logger.info(f"Cancelling game {game_to_cancel_id} by user {user.id}")
+        cleanup_game_telebot(game_to_cancel_id, chat_id, reason="cancelled by user")
+        bot.reply_to(message, "Cricket game cancelled.")
+    else: bot.reply_to(message, "You aren't in an active game here.")
 
-submissions = {}
+# ... (Broadcast, Achievement, Stat modification, Leaderboard commands remain unchanged from previous version) ...
+# --- Broadcast Command (Admin) ---
+@bot.message_handler(commands=['broad'])
+def handle_broadcast(message):
+    if message.from_user.id not in xmods: return bot.reply_to(message, "❌ Not authorized.")
+    if users_collection is None: return bot.reply_to(message, "⚠️ DB unavailable.")
+    try:
+        user_ids_to_broadcast = [user["_id"] for user in users_collection.find({}, {"_id": 1})]
+    except Exception as e: logger.error(f"DB error fetching users for broadcast: {e}"); return bot.reply_to(message, "⚠️ Error fetching users.")
+    if not user_ids_to_broadcast: return bot.reply_to(message, "⚠️ No registered users found.")
+    content_to_send = None; is_forward = False
+    if message.reply_to_message: content_to_send = message.reply_to_message; is_forward = True; logger.info(f"Admin {message.from_user.id} broadcasting via forward.")
+    else:
+        args = message.text.split(maxsplit=1)
+        if len(args) < 2: return bot.reply_to(message, "⚠️ Usage: `/broadcast <message>` or reply.")
+        content_to_send = args[1]; is_forward = False; logger.info(f"Admin {message.from_user.id} broadcasting text.")
+    sent_count = 0; failed_count = 0; total_users = len(user_ids_to_broadcast)
+    status_message = bot.reply_to(message, f"📢 Broadcasting to {total_users} users... [0/{total_users}]")
+    last_edit_time = datetime.now()
+    for i, user_id_str in enumerate(user_ids_to_broadcast):
+        try:
+            if is_forward: bot.forward_message(chat_id=user_id_str, from_chat_id=message.chat.id, message_id=content_to_send.message_id)
+            else: bot.send_message(user_id_str, content_to_send, parse_mode="Markdown")
+            sent_count += 1
+        except Exception as e: failed_count += 1; logger.warning(f"Broadcast failed for {user_id_str}: {e}")
+        now = datetime.now()
+        if (now - last_edit_time).total_seconds() > 2 or (i + 1) % 20 == 0 or (i + 1) == total_users:
+             try: bot.edit_message_text(f"📢 Broadcasting... [{sent_count}/{total_users}] Sent, [{failed_count}] Failed", chat_id=message.chat.id, message_id=status_message.message_id); last_edit_time = now
+             except Exception: pass
+    final_text = f"📢 Broadcast Finished!\n✅ Sent: {sent_count}\n❌ Failed: {failed_count}"
+    try: bot.edit_message_text(final_text, chat_id=message.chat.id, message_id=status_message.message_id)
+    except Exception: bot.reply_to(message, final_text)
 
-# Define the /add command handler
-@bot.message_handler(commands=['add'])
-def add_command(message):
-    # Create inline keyboard with options
-    keyboard = types.InlineKeyboardMarkup()
-    keyboard.row(
-        types.InlineKeyboardButton("Legendary", callback_data="legendary"),
-        types.InlineKeyboardButton("Non-Legendary", callback_data="non_legendary"),
-        types.InlineKeyboardButton("Shiny", callback_data="shiny"),
-        types.InlineKeyboardButton("TMs", callback_data="tms"),
-        types.InlineKeyboardButton("Teams", callback_data="teams")
-    )
+# --- Achievement Commands ---
+@bot.message_handler(commands=['achieve'])
+def add_achievement(message):
+    if message.from_user.id not in xmods: return bot.reply_to(message,"❌ Not authorized.")
+    if users_collection is None: return bot.reply_to(message, "⚠️ DB unavailable.")
+    args = message.text.split(maxsplit=1); target_user_id_str = None; title = None
+    if message.reply_to_message: target_user_id_str = str(message.reply_to_message.from_user.id); title = args[1].strip() if len(args) >= 2 else None
+    else:
+        parts = message.text.split(maxsplit=2)
+        if len(parts) < 3: return bot.reply_to(message, "⚠️ Usage: `/achieve <user_id> <title>`.")
+        target_user_id_str = parts[1]; title = parts[2].strip()
+        if not target_user_id_str.isdigit(): return bot.reply_to(message, "⚠️ Invalid User ID.")
+    if not title: return bot.reply_to(message, "⚠️ Title cannot be empty.")
+    encoded_title = urllib.parse.quote(title)
+    markup = InlineKeyboardMarkup().add(InlineKeyboardButton("✅ Confirm", callback_data=f"ach_confirm_add_{target_user_id_str}_{encoded_title}"), InlineKeyboardButton("❌ Cancel", callback_data="ach_cancel"))
+    bot.reply_to(message, f"🏅 Add \"*{html.escape(title)}*\" to user `{target_user_id_str}`?", reply_markup=markup, parse_mode="markdown")
 
-    # Send message to select type of item
-    bot.reply_to(message, "Select the type of item you want to add:", reply_markup=keyboard)
+@bot.message_handler(commands=['remove_achievement'])
+def remove_achievement(message):
+    if message.from_user.id not in xmods: return bot.reply_to(message,"❌ Not authorized.")
+    if users_collection is None: return bot.reply_to(message, "⚠️ DB unavailable.")
+    args = message.text.split(maxsplit=1); target_user_id_str = None; title = None
+    if message.reply_to_message: target_user_id_str = str(message.reply_to_message.from_user.id); title = args[1].strip() if len(args) >= 2 else None
+    else:
+        parts = message.text.split(maxsplit=2)
+        if len(parts) < 3: return bot.reply_to(message, "⚠️ Usage: `/remove_achievement <user_id> <title>`.")
+        target_user_id_str = parts[1]; title = parts[2].strip()
+        if not target_user_id_str.isdigit(): return bot.reply_to(message, "⚠️ Invalid User ID.")
+    if not title: return bot.reply_to(message, "⚠️ Title cannot be empty.")
+    encoded_title = urllib.parse.quote(title)
+    markup = InlineKeyboardMarkup().add(InlineKeyboardButton("✅ Confirm", callback_data=f"ach_confirm_remove_{target_user_id_str}_{encoded_title}"), InlineKeyboardButton("❌ Cancel", callback_data="ach_cancel"))
+    bot.reply_to(message, f"🗑️ Remove \"*{html.escape(title)}*\" from user `{target_user_id_str}`?", reply_markup=markup, parse_mode="markdown")
 
-# Handle inline button callbacks
-@bot.callback_query_handler(func=lambda call: call.data in ["legendary", "non_legendary", "shiny", "tms", "teams"])
-def callback_handler(call):
-    # Store type of item selected
-    submissions[call.message.chat.id] = {"type": call.data}
+@bot.message_handler(commands=['my_achievement'])
+def view_my_stats_and_achievements(message):
+    if users_collection is None: return bot.reply_to(message, "⚠️ DB unavailable.")
+    target_user = message.reply_to_message.from_user if message.reply_to_message else message.from_user
+    uid_str = str(target_user.id); user_data = get_user_data(uid_str)
+    if user_data is None: return bot.reply_to(message, "User not registered. /start in DM.")
+    runs = user_data.get("runs", 0); wickets = user_data.get("wickets", 0); achievements = user_data.get("achievements", [])
+    name = user_data.get("full_name") or get_player_name_telebot(target_user)
+    mention = f"[{name}](tg://user?id={uid_str})"; stats_text = f"📊 Stats for {mention}:\n  🏏 Runs: *{runs}*\n  🎯 Wickets: *{wickets}*"
+    achievement_text = "\n\n🏆 *Achievements*";
+    if achievements: achievement_text += f" ({len(achievements)}):\n" + "\n".join([f"  🏅 `{html.escape(str(title))}`" for title in achievements])
+    else: achievement_text += ":\n  *None yet.*"
+    bot.reply_to(message, stats_text + achievement_text, parse_mode="markdown", link_preview_options=LinkPreviewOptions(is_disabled=True))
 
-    if call.data in ["legendary", "non_legendary", "shiny"]:
-        # Ask for name of the Pokemon
-        bot.send_message(call.message.chat.id, "What is the name of the Pokemon you want to sell?")
-        bot.register_next_step_handler(call.message, forward_info)
-    elif call.data == "tms":
-        # Ask for name of the TM
-        bot.send_message(call.message.chat.id, "Enter the name of your TM:")
-        bot.register_next_step_handler(call.message, forward_tm_info)
-    elif call.data == "teams":
-        # Ask for name of the team
-        bot.send_message(call.message.chat.id, "What is the name of your team?")
-        bot.register_next_step_handler(call.message, forward_team_info)
+# --- Stat Modification Commands (Admin) ---
+@bot.message_handler(commands=['reduce_runs'])
+def reduce_runs_cmd(message):
+    if message.from_user.id not in xmods: return bot.reply_to(message, "❌ Not authorized.")
+    if users_collection is None: return bot.reply_to(message, "⚠️ DB unavailable.")
+    target_user = message.reply_to_message.from_user if message.reply_to_message else None
+    parts = message.text.split(); uid_str = None; amount = None
+    try:
+        if target_user: uid_str = str(target_user.id); amount = int(parts[1])
+        elif len(parts) >= 3: uid_str = parts[1]; amount = int(parts[2]); assert uid_str.isdigit()
+        else: raise ValueError("Invalid usage")
+        assert amount > 0
+    except (ValueError, IndexError, AssertionError): return bot.reply_to(message, "⚠️ Usage: Reply or `/reduce_runs <user_id> <amount>`.")
+    try:
+        user_doc = users_collection.find_one_and_update( {"_id": uid_str}, [{"$set": {"runs": {"$max": [0, {"$subtract": ["$runs", amount]}]}}}], projection={"runs": 1, "full_name": 1}, return_document=ReturnDocument.AFTER)
+        if user_doc: new_runs = user_doc.get("runs", 0); name = user_doc.get("full_name") or f"user {uid_str}"; mention = f"[{name}](tg://user?id={uid_str})"; bot.reply_to(message, f"✅ Reduced *{amount}* runs from {mention}. New total: *{new_runs}*.", parse_mode="Markdown", link_preview_options=LinkPreviewOptions(is_disabled=True))
+        else: bot.reply_to(message, f"⚠️ User `{uid_str}` not found.")
+    except Exception as e: logger.error(f"DB error reducing runs for {uid_str}: {e}"); bot.reply_to(message, "⚠️ DB error.")
 
-# Handle next step after getting name of pokemon
-def forward_info(message):
-    submissions[message.chat.id]["name"] = message.text
+@bot.message_handler(commands=['reduce_wickets'])
+def reduce_wickets_cmd(message):
+    if message.from_user.id not in xmods: return bot.reply_to(message, "❌ Not authorized.")
+    if users_collection is None: return bot.reply_to(message, "⚠️ DB unavailable.")
+    target_user = message.reply_to_message.from_user if message.reply_to_message else None
+    parts = message.text.split(); uid_str = None; amount = None
+    try:
+        if target_user: uid_str = str(target_user.id); amount = int(parts[1])
+        elif len(parts) >= 3: uid_str = parts[1]; amount = int(parts[2]); assert uid_str.isdigit()
+        else: raise ValueError("Invalid usage")
+        assert amount > 0
+    except (ValueError, IndexError, AssertionError): return bot.reply_to(message, "⚠️ Usage: Reply or `/reduce_wickets <user_id> <amount>`.")
+    try:
+         user_doc = users_collection.find_one_and_update({"_id": uid_str}, [{"$set": {"wickets": {"$max": [0, {"$subtract": ["$wickets", amount]}]}}}], projection={"wickets": 1, "full_name": 1}, return_document=ReturnDocument.AFTER)
+         if user_doc: new_wickets = user_doc.get("wickets", 0); name = user_doc.get("full_name") or f"user {uid_str}"; mention = f"[{name}](tg://user?id={uid_str})"; bot.reply_to(message, f"✅ Reduced *{amount}* wickets from {mention}. New total: *{new_wickets}*.", parse_mode="Markdown", link_preview_options=LinkPreviewOptions(is_disabled=True))
+         else: bot.reply_to(message, f"⚠️ User `{uid_str}` not found.")
+    except Exception as e: logger.error(f"DB error reducing wickets for {uid_str}: {e}"); bot.reply_to(message, "⚠️ DB error.")
 
-    # Ask for info of the pokemon
-    bot.send_message(message.chat.id, f"Please provide info of {message.text} by copying the text and pasting it here")
-    bot.register_next_step_handler(message, forward_iv_ev)
+@bot.message_handler(commands=['clear_all_stats'])
+def clear_all_stats(message):
+    if message.from_user.id not in xmods: return bot.reply_to(message, "❌ Not authorized.")
+    if users_collection is None: return bot.reply_to(message, "⚠️ DB unavailable.")
+    markup = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("⚠️ YES, CLEAR ALL STATS ⚠️", callback_data="confirm_clear_stats"), types.InlineKeyboardButton("❌ Cancel", callback_data="cancel_clear_stats"))
+    bot.reply_to(message, "🚨 *DANGER ZONE* 🚨\nClear ALL runs/wickets? Cannot be undone.", reply_markup=markup, parse_mode="Markdown")
 
-# Handle next step after getting info of pokemon
-def forward_iv_ev(message):
-    submissions[message.chat.id]["info"] = message.text
+@bot.message_handler(commands=['user_count'])
+def user_count(message):
+     if message.from_user.id not in xmods: return bot.reply_to(message, "❌ Not authorized.")
+     if users_collection is None: return bot.reply_to(message, "⚠️ DB unavailable.")
+     try: count = users_collection.count_documents({}); bot.reply_to(message, f"👥 Registered users in database: {count}")
+     except Exception as e: logger.error(f"DB error counting users: {e}"); bot.reply_to(message, "⚠️ Error counting users.")
 
-    # Ask for IVs/EVs of the pokemon
-    bot.send_message(message.chat.id, f"Please provide IVs/EVs of {submissions[message.chat.id]['name']} by copying the text and pasting it here")
-    bot.register_next_step_handler(message, forward_moveset)
+# --- Leaderboard Commands ---
+def get_user_mention_from_db(user_doc):
+    if not user_doc: return "Unknown User"
+    uid_str = user_doc.get("_id"); name = user_doc.get("full_name", f"User {uid_str}")
+    return f"[{name}](tg://user?id={uid_str})"
 
-# Handle next step after getting IVs/EVs of pokemon
-def forward_moveset(message):
-    submissions[message.chat.id]["iv_ev"] = message.text
+@bot.message_handler(commands=['lead_runs'])
+def show_runs_leaderboard(message: Message):
+    if users_collection is None: return bot.reply_to(message, "⚠️ DB unavailable.")
+    try:
+        top = list(users_collection.find({"runs": {"$gt": 0}}, {"_id": 1, "full_name": 1, "runs": 1}).sort("runs", -1).limit(5))
+        if not top: return bot.reply_to(message, "🏏 No runs scored yet.")
+        medals = ['🥇', '🥈', '🥉', '🏅', '🏅']; txt = "🏆 *Top 5 Run Scorers:*\n\n"
+        for i, u in enumerate(top): txt += f"{medals[i] if i<len(medals) else '🔹'} {get_user_mention_from_db(u)} - *{u.get('runs', 0)}* runs\n"
+        bot.reply_to(message, txt, parse_mode='Markdown', link_preview_options=LinkPreviewOptions(is_disabled=True))
+    except Exception as e: logger.error(f"DB error runs leaderboard: {e}"); bot.reply_to(message, "⚠️ Error fetching leaderboard.")
 
-    # Ask for moveset of the pokemon
-    bot.send_message(message.chat.id, f"Please provide the moveset of {submissions[message.chat.id]['name']} by copying the text and pasting it here")
-    bot.register_next_step_handler(message, ask_iv_boosted)
+@bot.message_handler(commands=['lead_wickets'])
+def show_wickets_leaderboard(message: Message):
+    if users_collection is None: return bot.reply_to(message, "⚠️ DB unavailable.")
+    try:
+        top = list(users_collection.find({"wickets": {"$gt": 0}}, {"_id": 1, "full_name": 1, "wickets": 1}).sort("wickets", -1).limit(5))
+        if not top: return bot.reply_to(message, "🎯 No wickets taken yet.")
+        medals = ['🥇', '🥈', '🥉', '🏅', '🏅']; txt = "🎯 *Top 5 Wicket Takers:*\n\n"
+        for i, u in enumerate(top): txt += f"{medals[i] if i<len(medals) else '🔹'} {get_user_mention_from_db(u)} - *{u.get('wickets', 0)}* wickets\n"
+        bot.reply_to(message, txt, parse_mode='Markdown', link_preview_options=LinkPreviewOptions(is_disabled=True))
+    except Exception as e: logger.error(f"DB error wickets leaderboard: {e}"); bot.reply_to(message, "⚠️ Error fetching leaderboard.")
 
-# Handle next step after getting moveset of pokemon
-def ask_iv_boosted(message):
-    submissions[message.chat.id]["moveset"] = message.text
 
-    # Ask if IVs are boosted
-    bot.send_message(message.chat.id, "Is any IV boosted of this Pokemon?")
-    bot.register_next_step_handler(message, ask_base)
+# --- Central Callback Query Handler ---
+@bot.callback_query_handler(func=lambda call: True)
+def handle_callback_query(call):
+    user = call.from_user; chat_id = call.message.chat.id
+    message_id = call.message.message_id; data = call.data
+    logger.debug(f"Callback: Data='{data}', User={user.id}, Chat={chat_id}, Msg={message_id}")
 
-# Handle next step after asking if IVs are boosted
-def ask_base(message):
-    # Store if IVs are boosted
-    submissions[message.chat.id]["iv_boosted"] = message.text
+    # --- Achievement & Stat Clear Callbacks ---
+    if data.startswith("ach_") or data == "confirm_clear_stats" or data == "cancel_clear_stats":
+        if users_collection is None: return bot.answer_callback_query(call.id, "Database unavailable.", show_alert=True)
+        if data.startswith("ach_"): # Achievement
+            parts = data.split("_", 4)
+            if parts[1] == "cancel": bot.edit_message_text("❌ Operation cancelled.", chat_id, message_id, reply_markup=None); return bot.answer_callback_query(call.id)
+            if len(parts) < 5 or user.id not in xmods: return bot.answer_callback_query(call.id, "Invalid/Unauthorized.")
+            action, mode, user_id_str, encoded_title = parts[1], parts[2], parts[3], parts[4]; title = urllib.parse.unquote(encoded_title)
+            try:
+                msg = "DB Error."; res = None
+                if mode == "add": res = users_collection.update_one({"_id": user_id_str}, {"$addToSet": {"achievements": title}}, upsert=False)
+                elif mode == "remove": res = users_collection.update_one({"_id": user_id_str}, {"$pull": {"achievements": title}})
+                if res:
+                    if res.matched_count == 0: msg = f"⚠️ User `{user_id_str}` not found."
+                    elif res.modified_count == 0: msg = f"⚠️ No changes made (already exists/doesn't exist)."
+                    elif mode == "add": msg = f"✅ Added \"*{html.escape(title)}*\" to `{user_id_str}`."; logger.info(f"Admin {user.id} added ach '{title}' for {user_id_str}")
+                    elif mode == "remove": msg = f"🗑️ Removed \"*~~{html.escape(title)}~~*\" from `{user_id_str}`."; logger.info(f"Admin {user.id} removed ach '{title}' for {user_id_str}")
+                bot.edit_message_text(msg, chat_id, message_id, parse_mode="markdown", reply_markup=None)
+            except Exception as e: logger.error(f"DB error ach callback {data}: {e}"); bot.edit_message_text("⚠️ DB error.", chat_id, message_id)
+            return bot.answer_callback_query(call.id)
+        elif data == "confirm_clear_stats": # Stat Clear Confirm
+            if user.id not in xmods: return bot.answer_callback_query(call.id, "Not authorized.")
+            try: res = users_collection.update_many({}, {"$set": {"runs": 0, "wickets": 0}}); bot.edit_message_text(f"🧹 Stats cleared for {res.modified_count} users!", chat_id, message_id, reply_markup=None); logger.warning(f"Admin {user.id} cleared stats ({res.modified_count})."); return bot.answer_callback_query(call.id, "Stats cleared!")
+            except Exception as e: logger.error(f"DB error clearing stats: {e}"); bot.edit_message_text("⚠️ Error clearing stats.", chat_id, message_id); return bot.answer_callback_query(call.id, "DB error.")
+        elif data == "cancel_clear_stats": # Stat Clear Cancel
+            bot.edit_message_text("❌ Stat clearing cancelled.", chat_id, message_id, reply_markup=None); return bot.answer_callback_query(call.id)
+    # --- End Achievement/Stat Clear ---
 
-    # Ask for base for the Pokemon
-    bot.send_message(message.chat.id, "Tell me the base for your Pokemon?")
-    bot.register_next_step_handler(message, send_submission)
 
-# Handle next step after asking for base
-def send_submission(message):
-    # Store base for the Pokemon
-    submissions[message.chat.id]["base"] = message.text
+    # --- Cricket Game Callbacks ---
+    try: action, value_str, game_id = data.split(":", 2); value = int(value_str) if value_str.isdigit() else value_str
+    except ValueError: return bot.answer_callback_query(call.id) # Ignore non-game format
 
-    # Send confirmation message
-    bot.send_message(message.chat.id, f"Your Pokemon {submissions[message.chat.id]['name']} has been sent for submission")
+    if game_id not in games:
+        logger.warning(f"Callback ignored: Game {game_id} not found.");
+        try: bot.edit_message_text("This game session has ended.", chat_id, message_id, reply_markup=None)
+        except Exception: pass
+        return bot.answer_callback_query(call.id, "Game session ended.")
 
-    # Send all data to admin
-    send_to_admin(message.chat.id)
+    game = games[game_id]
+    if message_id != game.get("message_id"):
+         logger.warning(f"Callback ignored: Stale msg ID game {game_id}.");
+         return bot.answer_callback_query(call.id, "Use buttons on the latest message.")
 
-# Handle next step after getting TM info
-def forward_tm_info(message):
-    submissions[message.chat.id]["name"] = message.text
+    # --- Game State Machine ---
+    current_state = game.get('state'); p1 = game['player1']; p2 = game.get('player2')
+    p1_name = p1['name']; p2_name = p2['name'] if p2 else "P2"
+    logger.debug(f"Processing game cb '{action}' game {game_id} state '{current_state}' user {user.id}")
 
-    # Ask for base for the TM
-    bot.send_message(message.chat.id, "Tell me the base for your TM:")
-    bot.register_next_step_handler(message, send_submission)
+    try:
+        # --- JOIN ---
+        if action == "join" and current_state == STATE_WAITING:
+             bot.answer_callback_query(call.id)
+             if user.id == p1['id'] or game.get('player2'): return # Prevent self-join or double-join
+             user_id_str = str(user.id)
+             if users_collection is not None and not get_user_data(user_id_str): return bot.send_message(chat_id, f"@{get_player_name_telebot(user)}, please /start me first.", reply_parameters=ReplyParameters(message_id=message_id))
+             player2_name = get_player_name_telebot(user)
+             game['player2'] = {"id": user.id, "name": player2_name, "user_obj": user}
+             game['state'] = STATE_TOSS; logger.info(f"P2 ({player2_name} - {user.id}) joined game {game_id}.")
+             markup = types.InlineKeyboardMarkup(row_width=2).add(types.InlineKeyboardButton("Heads", callback_data=f"toss:H:{game_id}"), types.InlineKeyboardButton("Tails", callback_data=f"toss:T:{game_id}"))
+             bot.edit_message_text(f"✅ {player2_name} joined!\n\n*Coin Toss Time!*\n\nPlayer 1 ({p1_name}), call Heads or Tails:", chat_id, message_id, reply_markup=markup, parse_mode="Markdown")
 
-# Handle next step after getting team info
-def forward_team_info(message):
-    submissions[message.chat.id]["name"] = message.text
+        # --- TOSS ---
+        elif action == "toss" and current_state == STATE_TOSS:
+             if user.id != p1['id']: return bot.answer_callback_query(call.id, f"Waiting for {p1_name}.")
+             if not p2: logger.error(f"G{game_id}: P2 miss TOSS"); cleanup_game_telebot(game_id, chat_id); return bot.answer_callback_query(call.id, "Error: P2 left?")
+             bot.answer_callback_query(call.id); choice = value; coin_flip = random.choice(['H', 'T'])
+             winner = p1 if choice == coin_flip else p2; game['toss_winner'] = winner['id']; game['state'] = STATE_BAT_BOWL
+             logger.info(f"G{game_id}: P1 chose {choice}, Flip={coin_flip}. Winner: {winner['name']}")
+             markup = types.InlineKeyboardMarkup(row_width=2).add(types.InlineKeyboardButton("Bat 🏏", callback_data=f"batorbowl:bat:{game_id}"), types.InlineKeyboardButton("Bowl 🧤", callback_data=f"batorbowl:bowl:{game_id}"))
+             bot.edit_message_text(f"Coin: *{'Heads' if coin_flip == 'H' else 'Tails'}*.\n🎉 {winner['name']} won toss!\n\nChoose Bat or Bowl:", chat_id, message_id, reply_markup=markup, parse_mode="Markdown")
 
-    # Ask for team members
-    bot.send_message(message.chat.id, "Send the list of team members:")
-    bot.register_next_step_handler(message, forward_team_members)
+        # --- BAT/BOWL ---
+        elif action == "batorbowl" and current_state == STATE_BAT_BOWL:
+             if user.id != game['toss_winner']: winner_pl = p1 if game['toss_winner'] == p1['id'] else p2; return bot.answer_callback_query(call.id, f"Wait {winner_pl['name']}.")
+             if not p2: logger.error(f"G{game_id}: P2 miss BAT_BOWL"); cleanup_game_telebot(game_id, chat_id); return bot.answer_callback_query(call.id, "Error: P2 left?")
+             bot.answer_callback_query(call.id); choice = value; winner = p1 if game['toss_winner'] == p1['id'] else p2; loser = p2 if game['toss_winner'] == p1['id'] else p1
+             batter = winner if choice == "bat" else loser; bowler = loser if choice == "bat" else winner
+             game.update({'current_batter': batter['id'], 'current_bowler': bowler['id'], 'innings': 1, 'state': STATE_P1_BAT, 'p1_score': 0, 'p2_score': 0, 'target': None, 'ball_count': 0}) # Reset ball count
+             logger.info(f"G{game_id}: {batter['name']} bats first.")
+             markup = create_standard_keyboard_telebot(game_id)
+             bot.edit_message_text(f"OK! {batter['name']} bats first.\n\n*--- Innings 1 ---*\nTarget: TBD\n\n🏏 Bat: {batter['name']}\n🧤 Bowl: {bowler['name']}\nScore: 0 (Balls: 0)\n\n➡️ {batter['name']}, select shot (1-6):", chat_id, message_id, reply_markup=markup, parse_mode="Markdown") # Show initial ball count
 
-# Handle next step after getting team members
-def forward_team_members(message):
-    submissions[message.chat.id]["members"] = message.text
+        # --- Number Choice (Game Turn) ---
+        elif action == "num":
+            expected_batter_state = STATE_P1_BAT if game['innings'] == 1 else STATE_P2_BAT
+            expected_bowler_state = STATE_P1_BOWL_WAIT if game['innings'] == 1 else STATE_P2_BOWL_WAIT
+            number_chosen = value
 
-    # Ask for base for the team
-    bot.send_message(message.chat.id, "Tell me the base for your team:")
-    bot.register_next_step_handler(message, send_submission)
+            if not p2: logger.error(f"G{game_id}: P2 miss NUM"); cleanup_game_telebot(game_id, chat_id); return bot.answer_callback_query(call.id, "Error: P2 missing.")
 
-# Function to send submission to admin
-def send_to_admin(chat_id):
-    submission_data = submissions[chat_id]
-    admin_chat_id = "6882194604"
-    
-    # Send header indicating new submission
-    bot.send_message(admin_chat_id, "New Submission:")
+            batter_id = game['current_batter']; bowler_id = game['current_bowler']
+            batter_player = p1 if batter_id == p1['id'] else p2; bowler_player = p1 if bowler_id == p1['id'] else p2
+            batter_id_str = str(batter_id); bowler_id_str = str(bowler_id)
+            batter_name = batter_player['name']; bowler_name = bowler_player['name']
+            current_ball_count = game.get('ball_count', 0) # Get current ball count
 
-    # Send each piece of submission data individually
-    bot.send_message(admin_chat_id, f"Type: {submission_data['type']}")
-    if submission_data['type'] in ["legendary", "non_legendary", "shiny"]:
-        bot.send_message(admin_chat_id, f"Name: {submission_data['name']}")
-        bot.send_message(admin_chat_id, f"Info: {submission_data['info']}")
-        bot.send_message(admin_chat_id, f"IVs/EVs: {submission_data['iv_ev']}")
-        bot.send_message(admin_chat_id, f"Moveset: {submission_data['moveset']}")
-        bot.send_message(admin_chat_id, f"IV Boosted: {submission_data['iv_boosted']}")
-        bot.send_message(admin_chat_id, f"Base: {submission_data['base']}")
-    elif submission_data['type'] == "tms":
-        bot.send_message(admin_chat_id, f"Name: {submission_data['name']}")
-        bot.send_message(admin_chat_id, f"Base: {submission_data['base']}")
-    elif submission_data['type'] == "teams":
-        bot.send_message(admin_chat_id, f"Name: {submission_data['name']}")
-        bot.send_message(admin_chat_id, f"Members: {submission_data['members']}")
-        bot.send_message(admin_chat_id, f"Base: {submission_data['base']}")
-    bot.send_message(admin_chat_id, f"User ID: {chat_id}")
+            # --- Batter's Turn ---
+            if current_state == expected_batter_state:
+                if user.id != batter_id: return bot.answer_callback_query(call.id, f"Wait {batter_name}.")
+                if game.get('batter_choice') is not None: return bot.answer_callback_query(call.id, "Waiting for bowler.")
+                bot.answer_callback_query(call.id, f"You chose {number_chosen}. Waiting...")
+                game['batter_choice'] = number_chosen; game['state'] = expected_bowler_state
+                current_game_score = game['p1_score'] if batter_id == p1['id'] else game['p2_score']
+                target_text = f" | Target: {game['target']}" if game.get('target') else ""
+                innings_text = f"*--- Innings {game['innings']} ---*{target_text}\n"
+                markup = create_standard_keyboard_telebot(game_id)
+                text = (f"{innings_text}\n🏏 Bat: {batter_name} (Played)\n🧤 Bowl: {bowler_name}\n\n"
+                        f"Score: {current_game_score} (Balls: {current_ball_count})\n\n➡️ {bowler_name}, select delivery (1-6):") # Show current balls
+                bot.edit_message_text(text, chat_id, message_id, reply_markup=markup, parse_mode="Markdown")
 
-# Start polling
-bot.polling()
+            # --- Bowler's Turn ---
+            elif current_state == expected_bowler_state:
+                 if user.id != bowler_id: return bot.answer_callback_query(call.id, f"Wait {bowler_name}.")
+                 bat_number = game.get('batter_choice')
+                 if bat_number is None:
+                    logger.error(f"G{game_id}: batter_choice missing!"); game['state'] = expected_batter_state # Revert
+                    try: bot.edit_message_text("Error: Batter lost choice. Batter, choose again.", chat_id, message_id, reply_markup=create_standard_keyboard_telebot(game_id))
+                    except Exception: pass; return bot.answer_callback_query(call.id, "Error: Batter choice missing.")
+
+                 bot.answer_callback_query(call.id); bowl_number = number_chosen
+                 game['ball_count'] += 1 # <<< INCREMENT BALL COUNT HERE >>>
+                 current_ball_count = game['ball_count'] # Get updated count
+
+                 result_text = f"{batter_name} played: {bat_number}\n{bowler_name} bowled: {bowl_number}\n\n"
+                 final_message_text = ""; final_markup = None; game_ended = False
+
+                 # -- OUT --
+                 if bat_number == bowl_number:
+                    result_text += f"💥 *OUT!* {batter_name} dismissed!\n\n"
+                    logger.info(f"G{game_id}: OUT! B={batter_id}, BW={bowler_id}, I{game['innings']}, Ball {current_ball_count}")
+                    if add_wicket_to_user(bowler_id_str): logger.info(f"DB: Wicket++ {bowler_id_str}")
+                    if game['innings'] == 1: # End Innings 1
+                        current_game_score = game['p1_score'] if batter_id == p1['id'] else game['p2_score']
+                        game['target'] = current_game_score + 1
+                        result_text += f"End Innings 1. Target: *{game['target']}*.\n\n*--- Innings 2 ---*\n"
+                        game.update({'current_batter': bowler_id, 'current_bowler': batter_id, 'innings': 2, 'batter_choice': None, 'state': STATE_P2_BAT, 'ball_count': 0}) # Reset ball count for Innings 2
+                        new_batter_pl = bowler_player; new_bowler_pl = batter_player
+                        new_batter_name = new_batter_pl['name']; new_bowler_name = new_bowler_pl['name']
+                        new_batter_game_score = game['p1_score'] if new_batter_pl['id'] == p1['id'] else game['p2_score']
+                        result_text += (f"Target: {game['target']}\n\n🏏 Bat: {new_batter_name}\n🧤 Bowl: {new_bowler_name}\n\n"
+                                       f"Score: {new_batter_game_score} (Balls: 0)\n\n➡️ {new_batter_name}, select shot (1-6):") # Show 0 balls
+                        final_message_text = result_text; final_markup = create_standard_keyboard_telebot(game_id)
+                    else: # Out in Innings 2 -> Game Over
+                        game_ended = True
+                        bat_score = game['p1_score'] if batter_id == p1['id'] else game['p2_score']; target = game['target']
+                        p1_final = game['p1_score']; p2_final = game['p2_score']
+                        result_text += f"*Game Over!*\n\n--- *Final Scores* ---\n👤 {p1_name}: {p1_final}\n👤 {p2_name}: {p2_final}\n\n"
+                        if bat_score < target - 1: margin = target - 1 - bat_score; result_text += f"🏆 *{bowler_name} wins by {margin} runs!*"
+                        elif bat_score == target - 1: result_text += f"🤝 *It's a Tie!*"
+                        final_message_text = result_text; final_markup = None
+
+                 # -- RUNS --
+                 else:
+                    runs_scored = bat_number
+                    result_text += f"🏏 Scored *{runs_scored}* runs!\n\n"
+                    logger.info(f"G{game_id}: Runs! {runs_scored}. B={batter_id}, BW={bowler_id}, I{game['innings']}, Ball {current_ball_count}")
+                    current_game_score = 0
+                    if batter_id == p1['id']: game['p1_score'] += runs_scored; current_game_score = game['p1_score']
+                    else: game['p2_score'] += runs_scored; current_game_score = game['p2_score']
+                    if add_runs_to_user(batter_id_str, runs_scored): logger.info(f"DB: Runs+{runs_scored} {batter_id_str}")
+                    game['batter_choice'] = None
+                    if game['innings'] == 2 and current_game_score >= game['target']: # Target chased
+                        game_ended = True; p1_final = game['p1_score']; p2_final = game['p2_score']
+                        result_text += f"*Target Chased! Game Over!*\n\n--- *Final Scores* ---\n👤 {p1_name}: {p1_final}\n👤 {p2_name}: {p2_final}\n\n🏆 *{batter_name} wins!*"
+                        final_message_text = result_text; final_markup = None
+                    else: # Continue batting
+                        game['state'] = expected_batter_state
+                        target_text = f" | Target: {game['target']}" if game.get('target') else ""
+                        innings_text = f"*--- Innings {game['innings']} ---*{target_text}\n"
+                        result_text += (f"{innings_text}\n🏏 Bat: {batter_name}\n🧤 Bowl: {bowler_name}\n\n"
+                                        f"Score: {current_game_score} (Balls: {current_ball_count})\n\n➡️ {batter_name}, select shot (1-6):") # Show current balls
+                        final_message_text = result_text; final_markup = create_standard_keyboard_telebot(game_id)
+
+                 # --- Edit Message ---
+                 try: bot.edit_message_text(final_message_text, chat_id, message_id, reply_markup=final_markup, parse_mode="Markdown")
+                 except Exception as edit_err:
+                      logger.error(f"Failed edit msg {message_id} G{game_id}: {edit_err}")
+                      if game_ended: bot.send_message(chat_id, final_message_text, parse_mode="Markdown"); cleanup_game_telebot(game_id, chat_id, reason="finished normally", edit_markup=False)
+                      else: bot.send_message(chat_id, "Error updating game. Use latest msg or /cancel.")
+
+                 if game_ended: cleanup_game_telebot(game_id, chat_id, reason="finished normally", edit_markup=False)
+
+        # --- Ignore other actions ---
+        else: bot.answer_callback_query(call.id)
+
+    # --- Catch errors ---
+    except Exception as e:
+        logger.exception(f"!!! Critical Error processing game callback game {game_id}: Data={data}")
+        try: bot.answer_callback_query(call.id, "Unexpected game error.")
+        except Exception as ie: logger.error(f"Error answering critical game error cb: {ie}")
+
+
+# --- Start Polling ---
+if __name__ == '__main__':
+    logger.info("Starting Combined Cricket & Stats Bot with MongoDB...")
+    if users_collection is None: logger.warning("!!! BOT RUNNING WITHOUT DATABASE CONNECTION !!!")
+    try:
+        logger.info(f"Bot username: @{bot.get_me().username}")
+        bot.infinity_polling(logger_level=logging.INFO, long_polling_timeout=5, timeout=10)
+    except Exception as poll_err: logger.critical(f"Polling loop crashed: {poll_err}")
+    finally:
+        if 'client' in locals() and client:
+             try: client.close(); logger.info("MongoDB connection closed.")
+             except Exception as close_err: logger.error(f"Error closing MongoDB connection: {close_err}")
+        logger.info("Bot polling stopped.")
+
+# --- END OF FULLY REVISED FILE with MongoDB & Ball Count (v4) ---
