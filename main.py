@@ -25,7 +25,7 @@ API_ID = os.environ.get("API_ID", 25695711) # Replace with your API ID (integer)
 API_HASH = os.environ.get("API_HASH", "f20065cc26d4a31bf0efc0b44edaffa9") # Replace with your API Hash (string)
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "7906407273:AAHe77DY7TI9gmzsH-UM6k1vB9xDLRa_534") # Your bot token
 MONGO_URI = os.environ.get("MONGO_URI", "mongodb+srv://yesvashisht:yash2005@clusterdf.yagj9ok.mongodb.net/?retryWrites=true&w=majority&appName=Clusterdf") # Replace with your MongoDB URI
-MONGO_DB_NAME = "tct_cricket_bot_db_telethon" # Use a distinct DB?
+MONGO_DB_NAME = "tct_cricket_bot_db" # Use a distinct DB?
 
 # --- Game Configuration ---
 DEFAULT_PLAYERS_PER_TEAM = 2
@@ -360,7 +360,7 @@ async def handle_start(event):
     reg_success = await register_user_telethon(sender)
     user_data = await asyncio.to_thread(get_user_data, user_id) # Check if exists AFTER attempting registration
     if reg_success:
-        markup = client.build_reply_markup([[Button.url('Channel', 'https://t.me/TCTCRICKET'), Button.url('Group', 'https://t.me/+SIzIYQeMsRsyOWM1')]], inline_only=True)
+        markup = client.build_reply_markup([[Button.url('Channel', 'https://t.me/+mWi76-3J875kMWFl'), Button.url('Group', 'https://t.me/+jLCPxBncYYYyODNl')]], inline_only=True)
         # Check if it was a registration or just an update
         # user_data will be None if this was the first registration attempt within this handler
         is_new_user = user_data is None # Or check result.upserted_id in register_user_sync if needed
