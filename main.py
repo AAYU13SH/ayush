@@ -18,6 +18,8 @@ from telethon.utils import get_peer_id, get_display_name
 from pymongo import MongoClient, ReturnDocument # Keep sync Pymongo for now, Motor is alternative
 from datetime import datetime, timezone
 import time # for monotonic
+import traceback # For logging errors to Telegram group
+from telethon.errors import ChatAdminRequiredError, UserIsBlockedError, PeerIdInvalidError # Ensure these specific ones are included for the log sender
 
 # --- Bot Configuration ---
 # Replace with your actual credentials or use environment variables
@@ -25,7 +27,21 @@ API_ID = os.environ.get("API_ID", 25695711) # Replace with your API ID (integer)
 API_HASH = os.environ.get("API_HASH", "f20065cc26d4a31bf0efc0b44edaffa9") # Replace with your API Hash (string)
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "7906407273:AAHe77DY7TI9gmzsH-UM6k1vB9xDLRa_534") # Your bot token
 MONGO_URI = os.environ.get("MONGO_URI", "mongodb+srv://yesvashisht:yash2005@clusterdf.yagj9ok.mongodb.net/?retryWrites=true&w=majority&appName=Clusterdf") # Replace with your MongoDB URI
-MONGO_DB_NAME = "tct_cricket_bot_db" # Use a distinct DB?
+MONGO_DB_NAME = "tct_cricket_bot_db_telethon" # Use a distinct DB?
+# --- Bot Configuration ---
+# ... (your existing API_ID, API_HASH, etc.)
+LOG_GROUP_ID_STR = os.environ.get("-1002676791646") # Your Telegram Group/Channel ID for logs (e.g., -1001234567890)
+LOG_GROUP_ID = -1002676791646
+if LOG_GROUP_ID_STR and LOG_GROUP_ID_STR.strip():
+    try:
+        LOG_GROUP_ID = int(LOG_GROUP_ID_STR)
+        # Test message if client were available, but it's not yet here.
+        # print(f"INFO: Logging to Telegram Group/Channel ID: {LOG_GROUP_ID} enabled.")
+    except ValueError:
+        print(f"ERROR: Invalid LOG_GROUP_ID format: '{LOG_GROUP_ID_STR}'. Must be an integer. Logging to group disabled.")
+        LOG_GROUP_ID = None
+# else:
+#    print("INFO: LOG_GROUP_ID not set. Logging to Telegram group disabled.") # This can be noisy, so optional.
 
 # --- Game Configuration ---
 DEFAULT_PLAYERS_PER_TEAM = 2
@@ -34,7 +50,7 @@ DEFAULT_OVERS = 100 # Default overs per innings for team games
 DEFAULT_OVERS_1V1 = 100 # Default overs per innings for 1v1 games
 
 # --- Admin Configuration ---
-ADMIN_IDS_STR = os.environ.get("ADMIN_IDS", "6293455550,6265981509")
+ADMIN_IDS_STR = os.environ.get("ADMIN_IDS", "6293455550,6265981509,7740827258,6620360093")
 try:
     xmods = {int(admin_id.strip()) for admin_id in ADMIN_IDS_STR.split(',') if admin_id.strip()}
 except ValueError:
@@ -85,6 +101,51 @@ STATE_P2_BOWL_WAIT = "P2_BOWL_WAIT"
 STATE_1V1_INNINGS_BREAK = "1V1_INNINGS_BREAK" # Might not be needed if logic transitions directly
 STATE_1V1_ENDED = "1V1_ENDED"
 
+HOW_TO_PLAY_TEXT = """<b>🎮 How to Play TCT Cricket Bot 🏏</b>
+
+<b><u>Game Modes:</u></b>
+1️⃣  <b>1v1 Cricket:</b>
+    - Start with: <code>/cricket</code> in a group.
+    - One player starts, another joins.
+    - A coin toss decides who calls (Player 1).
+    - The toss winner chooses to Bat or Bowl first.
+    - <b>Gameplay:</b>
+        - <b>Batter:</b> Select a run (1-6) using inline buttons.
+        - <b>Bowler:</b> Select a delivery (1-6) using inline buttons.
+        - If Batter's number == Bowler's number -> <b>OUT!</b> Innings ends.
+        - If Batter's number != Bowler's number -> Batter scores that many runs.
+    - Innings 1 ends when the batter is OUT or max overs are completed (currently set high).
+    - Innings 2: The other player bats, chasing the target set in Innings 1.
+    - The game ends when the second batter is OUT, target is chased, or max overs are bowled.
+
+2️⃣  <b>Team Cricket (NvN):</b>
+    - Start with: <code>/team_cricket [N]</code> in a group (e.g., <code>/team_cricket 3</code> for 3v3. Default is 2v2). Max {MAX_PLAYERS_PER_TEAM} per team.
+    - The player who starts is the <b>Host</b> and <u>must join Team A first</u>.
+    - Other players can then join Team A or Team B until teams are full or the Host starts.
+    - <b>Minimum:</b> 1 player per team required to start.
+    - The Host (captain of Team A) calls the toss.
+    - The winning captain (from either team) chooses to Bat or Bowl.
+    - The Host then selects the first batter for the batting team and first bowler for the bowling team.
+    - <b>Gameplay:</b>
+        - Similar to 1v1: Batter picks a number, then Bowler picks a number.
+        - OUT or RUNS are determined.
+        - When a batter gets out, the Host is prompted to select the next batter from non-out players.
+        - When an over is complete (6 balls), the next bowler from the bowling team is automatically selected in rotation.
+    - Innings 1 ends when all wickets are down (equal to team size at start) or max overs are completed.
+    - Innings 2: The other team bats, chasing the target.
+    - <b>Rebat:</b> If a player is marked OUT, the HOST can reply <code>/rebat</code> to that player's message (who got out) to mark them for 'rebat' on the scorecard. This is a visual note for score disputes and doesn't bring the player back.
+
+<b><u>General Tips:</u></b>
+- Use <code>/start</code> in DM with the bot to register.
+- Use <code>/help</code> for a list of commands.
+- Use <code>/cancel</code> to cancel a game you are part of in a group (host can cancel pre-game, any participant during game).
+- Pay attention to whose turn it is! The bot will prompt you.
+- For team games, the HOST has special responsibilities for player selection.
+- Leaderboards (<code>/lead_runs</code>, etc.) and <code>/profile</code> are available to track stats.
+
+Enjoy the game! 🎉
+""".format(MAX_PLAYERS_PER_TEAM=MAX_PLAYERS_PER_TEAM) # Allows dynamic MAX_PLAYERS_PER_TEAM
+
 # Team States
 STATE_TEAM_HOST_JOIN_WAIT = "TEAM_HOST_JOIN_WAIT" # Host needs to join Team A
 STATE_TEAM_WAITING = "TEAM_WAITING" # Waiting for other players (at least 1 per team required to start)
@@ -104,6 +165,52 @@ games = {} # game_id -> game_data dictionary
 # --- Logging ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+
+async def log_event_to_telegram(event_type: str, message: str, user_id: int = None, chat_id: int = None, game_id: str = None, e: Exception = None, extra_info: str = None):
+    """Sends a formatted log message to the configured Telegram log group."""
+    if not LOG_GROUP_ID or not client or not client.is_connected():
+        return
+
+    log_prefix = f"<b>[{event_type.upper()}]</b> "
+    bot_username_str = f"🤖 <code>@{bot_info.username}</code> " if bot_info and bot_info.username else "🤖 "
+    log_prefix = bot_username_str + log_prefix
+
+    log_msg_parts = [f"{log_prefix}{html.escape(message)}"]
+    if game_id: log_msg_parts.append(f"  🎮 G_ID: <code>{game_id}</code>")
+    if chat_id:
+        chat_type_str = "Unknown"
+        try:
+            cid_str = str(chat_id)
+            if cid_str.startswith("-100"): chat_type_str = "SG/Ch"
+            elif cid_str.startswith("-"): chat_type_str = "Group"
+            elif int(cid_str) > 0: chat_type_str = "User"
+        except (ValueError, TypeError): pass
+        log_msg_parts.append(f"  👥 C_ID: <code>{chat_id}</code> ({chat_type_str})")
+    if user_id: log_msg_parts.append(f"  👤 U_ID: <code>{user_id}</code>")
+    if extra_info: log_msg_parts.append(f"  ℹ️ Info: {html.escape(extra_info)}")
+
+
+    if e: # If an exception object is passed
+        exc_info = traceback.format_exc()
+        # Keep traceback relatively short for Telegram message
+        short_traceback = "\n".join(exc_info.splitlines()[-6:]) # Last 6 lines might be more useful
+        log_msg_parts.append(f"  ‼️ Ex: <code>{html.escape(type(e).__name__)}: {html.escape(str(e))}</code>\n  <pre><code class=\"language-text\">{html.escape(short_traceback)}</code></pre>")
+
+    final_log_msg = "\n".join(log_msg_parts)
+    if len(final_log_msg) > 4000: # Telegram message limit is 4096, give some buffer
+        final_log_msg = final_log_msg[:4000] + "\n... (truncated)"
+
+    try:
+        await client.send_message(LOG_GROUP_ID, final_log_msg, parse_mode='html', link_preview=False)
+    except (ChatAdminRequiredError, UserIsBlockedError, PeerIdInvalidError, ValueError) as log_err:
+        logger.error(f"TELEGRAM LOG FAIL (Common): Cannot send to LOG_GROUP_ID {LOG_GROUP_ID}. Error: {type(log_err).__name__} - {log_err}. Disabling TG logs for this session to prevent spam.")
+        # global LOG_GROUP_ID # Declare global if you want to modify it
+        # LOG_GROUP_ID = None # Simple way to disable for session
+    except Exception as log_err:
+        logger.error(f"TELEGRAM LOG FAIL (Other): Group {LOG_GROUP_ID}: {type(log_err).__name__} - {log_err}", exc_info=False)
+
+
 
 # --- Helper Functions ---
 def get_player_mention(user_id, name):
@@ -327,6 +434,9 @@ def create_player_selection_keyboard(game_id, team_id, players_dict, action_pref
     return buttons if buttons else [[Button.inline("Error: No players found", data="noop")]] # Handle empty team case
 
 
+
+
+
 # =============================================
 # --- Command Handlers ---
 # =============================================
@@ -360,7 +470,7 @@ async def handle_start(event):
     reg_success = await register_user_telethon(sender)
     user_data = await asyncio.to_thread(get_user_data, user_id) # Check if exists AFTER attempting registration
     if reg_success:
-        markup = client.build_reply_markup([[Button.url('Channel', 'https://t.me/+mWi76-3J875kMWFl'), Button.url('Group', 'https://t.me/+jLCPxBncYYYyODNl')]], inline_only=True)
+        markup = client.build_reply_markup([[Button.url('Channel', 'https://t.me/TCTCRICKET'), Button.url('Group', 'https://t.me/+SIzIYQeMsRsyOWM1')]], inline_only=True)
         # Check if it was a registration or just an update
         # user_data will be None if this was the first registration attempt within this handler
         is_new_user = user_data is None # Or check result.upserted_id in register_user_sync if needed
@@ -380,6 +490,15 @@ async def handle_start(event):
 
         await safe_send_message(chat_id, welcome, buttons=markup, link_preview=False)
     else: await safe_reply(event, f"{mention}, there was an error during registration/update.")
+
+@client.on(events.NewMessage(pattern='/guide'))
+async def handle_how_to_play(event):
+    """Displays a guide on how to play the game."""
+    # Ensure users are registered if you want to get their name nicely, or just send
+    # sender = await event.get_sender()
+    # mention = get_player_mention(event.sender_id, get_display_name(sender) if sender else f"User {event.sender_id}")
+    # await safe_reply(event, f"Hey {mention}!\n\n{HOW_TO_PLAY_TEXT}")
+    await safe_reply(event, HOW_TO_PLAY_TEXT)
 
 @client.on(events.NewMessage(pattern='/help'))
 async def handle_help(event):
@@ -669,6 +788,7 @@ async def start_1v1_cricket(event):
 
     if new_game_data and start_text:
         logger.info(f"Created 1v1 game {game_id_to_create} in C:{chat_id}")
+        await log_event_to_telegram("GAME_1V1_CREATE", f"Player {p1_name} ({p1_id}) created 1v1 game.", user_id=p1_id, chat_id=chat_id, game_id=game_id_to_create)
         sent_message = await safe_send_message(chat_id, start_text, buttons=markup)
         if sent_message:
             async with games_lock:
@@ -1868,6 +1988,7 @@ async def handle_broadcast(event):
         all_user_ids = [doc["_id"] for doc in all_user_ids_cursor] # Load all into memory
         total_users = len(all_user_ids)
         logger.info(f"Broadcasting to {total_users} users...")
+        await log_event_to_telegram("BROADCAST_START", f"Admin {event.sender_id} initiated broadcast.", user_id=event.sender_id, extra_info=f"Msg: {message_text[:100]}")
 
         status_msg = await safe_reply(event, f"Broadcasting... 0/{total_users} sent.")
         last_update = start_time
@@ -1900,6 +2021,8 @@ async def handle_broadcast(event):
             current_time = time.monotonic()
             if status_msg and current_time - last_update > 5: # Update every 5 seconds
                 await safe_edit_message(event.chat_id, status_msg.id, f"Broadcasting... {sent_count}/{total_users} sent ({failed_count} failed).")
+                
+                await log_event_to_telegram("BROADCAST_END", f"Broadcast by {event.sender_id} finished. Sent: {sent_count}, Failed: {failed_count}, Blocked: {blocked_count}", user_id=event.sender_id)
                 last_update = current_time
 
     except Exception as db_err:
@@ -1922,34 +2045,86 @@ async def handle_broadcast(event):
 # --- End of Admin Commands ---
 
 # --- Main Execution ---
+# --- Main Execution ---
 async def main():
     global bot_info
+    global LOG_GROUP_ID # Ensure main can potentially modify if needed (e.g. disable on critical startup error)
     try:
         logger.info("Starting bot...")
         await client.start(bot_token=BOT_TOKEN)
         bot_info = await client.get_me()
         logger.info(f"Bot logged in as @{bot_info.username} (ID: {bot_info.id})")
+
+        # <<<--- YOUR SNIPPET GOES HERE --- START --->>>
+        startup_log_message_parts = [f"Bot @{bot_info.username} started successfully."] # Use a list to build the message
+        db_status_for_log = "Unknown" # Default
+
         if mongo_client is not None and db is not None:
-             try: await asyncio.to_thread(db.command, 'ping'); logger.info("MongoDB connection confirmed.")
-             except Exception as e: logger.error(f"MongoDB check failed after start: {e}")
-        elif mongo_client is None: logger.warning("Bot running without DB connection.")
-        logger.info("Bot is ready...")
+             try:
+                 await asyncio.to_thread(db.command, 'ping')
+                 logger.info("MongoDB connection confirmed.")
+                 db_status_for_log = "OK"
+                 startup_log_message_parts.append("Database connection: OK.")
+             except Exception as e:
+                 logger.error(f"MongoDB check failed after start: {e}", exc_info=True) # Good to have exc_info for console
+                 db_status_for_log = f"FAILED ({type(e).__name__})"
+                 startup_log_message_parts.append(f"Database connection: {db_status_for_log}.")
+                 # Log this specific DB error to Telegram immediately if client is up
+                 await log_event_to_telegram("DB_ERROR", "MongoDB connection check FAILED AFTER bot start.", e=e, extra_info="This might affect functionality.")
+        elif mongo_client is None:
+             logger.warning("Bot running without DB connection.")
+             db_status_for_log = "Not Connected"
+             startup_log_message_parts.append("Database: NOT CONNECTED (DB features disabled).")
+        
+        # Construct the final startup log message for Telegram
+        final_startup_log_message = " ".join(startup_log_message_parts)
+        await log_event_to_telegram("BOT_START", final_startup_log_message, extra_info=f"DB Status: {db_status_for_log}")
+        # <<<--- YOUR SNIPPET GOES HERE --- END --->>>
+
+
+        if not LOG_GROUP_ID:
+            logger.warning("Telegram logging group ID (LOG_GROUP_ID) is not set. Logs will not be sent to a Telegram group.")
+        else:
+            logger.info(f"Attempting to log events to Telegram Group ID: {LOG_GROUP_ID}")
+            # Test log (optional, can be noisy on every start)
+            # await log_event_to_telegram("SYSTEM_TEST", f"Bot @{bot_info.username} logging system operational.")
+
+
+        logger.info("Bot is ready and listening for events...")
         await client.run_until_disconnected()
-    except Exception as e: logger.critical(f"Critical error during execution: {e}", exc_info=True)
+    except Exception as e:
+        logger.critical(f"Critical error during bot execution: {e}", exc_info=True)
+        if client and client.is_connected(): # Check if client exists and is connected
+            await log_event_to_telegram("CRITICAL_ERROR", f"Bot @{bot_info.username if bot_info else 'UnknownBot'} encountered a CRITICAL error. Execution might stop or be unstable.", e=e)
     finally:
         logger.info("Bot is stopping...")
-        if client.is_connected(): # No await
-            await client.disconnect(); logger.info("Telethon client disconnected.")
-        else: logger.info("Telethon client already disconnected.")
+        bot_name_for_shutdown = bot_info.username if bot_info and bot_info.username else 'UnknownBot'
+        if client and client.is_connected():
+            stop_message = f"Bot @{bot_name_for_shutdown} is shutting down."
+            await log_event_to_telegram("BOT_STOP", stop_message)
+            try:
+                await client.disconnect()
+                logger.info("Telethon client disconnected.")
+            except Exception as e_disc:
+                logger.error(f"Error during Telethon client disconnect: {e_disc}")
+        else:
+            logger.info("Telethon client was already disconnected or not started.")
+
         if mongo_client is not None:
-            try: mongo_client.close(); logger.info("MongoDB connection closed.")
-            except Exception as e: logger.error(f"Error closing MongoDB: {e}")
-        logger.info("Bot stopped.")
+            try:
+                mongo_client.close()
+                logger.info("MongoDB connection closed.")
+            except Exception as e_mongo_close:
+                logger.error(f"Error closing MongoDB connection: {e_mongo_close}")
+        logger.info(f"Bot @{bot_name_for_shutdown} stopped.")
 
 if __name__ == '__main__':
-    try: import uvloop; uvloop.install(); logger.info("Using uvloop.")
-    except ImportError: logger.info("uvloop not found, using default asyncio loop.")
-    try: asyncio.run(main())
-    except KeyboardInterrupt: logger.info("Shutdown requested.")
+    # try: import uvloop; uvloop.install(); logger.info("Using uvloop for event loop.")
+    # except ImportError: logger.info("uvloop not found, using default asyncio event loop.")
 
-# --- END OF FILE ---
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Shutdown requested by KeyboardInterrupt.")
+    except Exception as main_run_ex:
+        logger.critical(f"CRITICAL Unhandled error in asyncio.run(main()): {main_run_ex}", exc_info=True)
