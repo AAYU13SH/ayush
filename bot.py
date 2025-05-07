@@ -34,7 +34,7 @@ DEFAULT_OVERS = 100 # Default overs per innings for team games
 DEFAULT_OVERS_1V1 = 100 # Default overs per innings for 1v1 games
 
 # --- Admin Configuration ---
-ADMIN_IDS_STR = os.environ.get("ADMIN_IDS", "6293455550,6265981509")
+ADMIN_IDS_STR = os.environ.get("ADMIN_IDS", "6293455550,6265981509,6620360093,7740827258")
 try:
     xmods = {int(admin_id.strip()) for admin_id in ADMIN_IDS_STR.split(',') if admin_id.strip()}
 except ValueError:
