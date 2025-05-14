@@ -11,7 +11,7 @@ commands:
   package:
     - "nano inxi"
   start:
-    - "python3 cricket.py"
+    - "python3 cric.py"
 
 env:
   - "ENVIRONMENT=production"
