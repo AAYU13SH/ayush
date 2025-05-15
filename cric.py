@@ -275,29 +275,31 @@ def increment_matches_played_sync(user_id_list):
 def add_credits_sync(user_id, credits_to_add):
     if users_collection is None:
         logger.warning("DB unavailable for credits operation.")
-        return False
-    if credits_to_add == 0: return True # No change needed, considered success
+        return False # Indicates general failure, not specific like "insufficient"
+    if credits_to_add == 0: 
+        return True # No change needed, considered success
 
     user_id_str = str(user_id)
     try:
         user_doc = users_collection.find_one({"_id": user_id_str})
         if not user_doc:
             logger.warning(f"DB: Add/deduct credits fail, user {user_id_str} not found.")
-            return False # User must exist
+            return False # User must exist for any credit modification
 
         current_credits = user_doc.get("credits", 0)
+        # Check for insufficient funds only when deducting
         if credits_to_add < 0 and current_credits < abs(credits_to_add):
             logger.info(f"DB: User {user_id_str} has insufficient credits ({current_credits}) for deduction {abs(credits_to_add)}.")
-            return "insufficient"
+            return "insufficient" # Specific return for insufficient funds
 
         res = users_collection.update_one(
             {"_id": user_id_str},
             {"$inc": {"credits": credits_to_add}}
         )
-        return res.matched_count > 0
+        return res.matched_count > 0 # True if update happened
     except Exception as e:
         logger.error(f"DB add/deduct credits for {user_id_str} ({credits_to_add}): {e}", exc_info=True)
-        return False
+        return False # General DB error
 
 async def add_credits_to_user(user_id, credits_amount):
     return await asyncio.to_thread(add_credits_sync, user_id, credits_amount)
