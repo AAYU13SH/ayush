@@ -535,6 +535,141 @@ async def handle_start(event):
     else: await safe_reply(event, f"{mention}, there was an error during registration/update. Please try /start again.")
 
 
+@client.on(events.NewMessage(pattern=r'/send (\d+) ?(?:@?([\w\d_]+)|(\d+))?'))
+async def handle_send_credits(event):
+    if users_collection is None:
+        return await safe_reply(event, "⚠️ Credits system is currently unavailable (DB offline).")
+
+    sender_id = event.sender_id
+    sender_entity = await event.get_sender()
+    if not sender_entity: # Should rarely happen for non-channel posts
+        logger.warning(f"/send command from unknown sender_id: {sender_id}")
+        return await safe_reply(event, "Could not identify the sender.")
+    
+    sender_display_name = get_display_name(sender_entity)
+    sender_mention = get_player_mention(sender_id, sender_display_name)
+
+    # Check if sender is registered
+    sender_data = await asyncio.to_thread(get_user_data, sender_id)
+    if not sender_data:
+        return await safe_reply(event, f"{sender_mention}, you need to /start the bot in DM first to use credits.")
+
+    try:
+        amount_to_send_str = event.pattern_match.group(1)
+        amount_to_send = int(amount_to_send_str)
+
+        if amount_to_send <= 0:
+            return await safe_reply(event, "Amount to send must be a positive number.")
+
+        target_username_str = event.pattern_match.group(2) # @username or username_without_@
+        target_user_id_from_arg_str = event.pattern_match.group(3) # user_id as argument
+        
+        recipient_id = None
+        recipient_mention_fallback = "The recipient" # Default if name can't be fetched
+
+        if event.is_reply:
+            reply_msg = await event.get_reply_message()
+            if reply_msg and reply_msg.sender_id:
+                recipient_id = reply_msg.sender_id
+                try: # Try to get name for better mention
+                    replied_user_entity = await client.get_entity(recipient_id)
+                    recipient_mention_fallback = get_player_mention(recipient_id, get_display_name(replied_user_entity))
+                except Exception:
+                    recipient_mention_fallback = f"User <code>{recipient_id}</code>"
+            else: # Reply didn't have a sender_id (e.g. reply to channel message)
+                return await safe_reply(event, "Invalid reply. Please reply to a user's message to send credits or specify their @username/ID directly after the amount.")
+        
+        elif target_username_str:
+            try:
+                recipient_entity = await client.get_entity(target_username_str)
+                recipient_id = recipient_entity.id
+                recipient_mention_fallback = get_player_mention(recipient_id, get_display_name(recipient_entity))
+            except ValueError: # Username not found or invalid
+                 return await safe_reply(event, f"Could not find user: <code>{html.escape(target_username_str)}</code>. Please check the username or use their User ID.")
+            except Exception as e_entity: # Other errors like PEER_ID_INVALID if username is malformed
+                logger.warning(f"Error getting entity for username '{target_username_str}': {e_entity}")
+                return await safe_reply(event, f"Error finding user <code>{html.escape(target_username_str)}</code>. Try using their User ID.")
+        
+        elif target_user_id_from_arg_str:
+            try:
+                recipient_id = int(target_user_id_from_arg_str)
+                try: # Try to get name for better mention
+                    recipient_entity_by_id = await client.get_entity(recipient_id)
+                    recipient_mention_fallback = get_player_mention(recipient_id, get_display_name(recipient_entity_by_id))
+                except Exception:
+                     recipient_mention_fallback = f"User <code>{recipient_id}</code>"
+            except ValueError:
+                return await safe_reply(event, "Invalid User ID format provided.")
+        
+        else: # No reply, no username, no user_id argument
+            return await safe_reply(event, "Usage: <code>/send <amount> @username_or_user_id</code> or reply to a user's message with <code>/send <amount></code>.")
+
+        if not recipient_id: # Should have been caught, but final check
+            return await safe_reply(event, "Could not determine the recipient. Please specify a valid @username, User ID, or reply to a user.")
+
+        if recipient_id == sender_id:
+            return await safe_reply(event, "You cannot send credits to yourself!")
+
+        # Check if recipient is registered
+        recipient_data = await asyncio.to_thread(get_user_data, recipient_id)
+        if not recipient_data:
+            return await safe_reply(event, f"{recipient_mention_fallback} is not registered with the bot. They need to /start me in DM first to receive credits.")
+        
+        # Use recipient's registered name for notifications
+        recipient_display_name = recipient_data.get("full_name", f"User {recipient_id}")
+        recipient_mention = get_player_mention(recipient_id, recipient_display_name) # Final mention for notifications
+
+        # Check sender's balance
+        sender_current_credits = sender_data.get("credits", 0)
+        if sender_current_credits < amount_to_send:
+            return await safe_reply(event, f"{sender_mention}, you only have {sender_current_credits} credits. Not enough to send {amount_to_send}.")
+
+        # --- Perform Transaction ---
+        # 1. Deduct from sender
+        deduction_result = await add_credits_to_user(sender_id, -amount_to_send)
+        if deduction_result == "insufficient": 
+            logger.warning(f"Credit send: Sender {sender_id} insufficient funds ({sender_current_credits}) for {amount_to_send} - DB check.")
+            return await safe_reply(event, "Transaction failed: Insufficient credits (re-checked).")
+        if deduction_result is not True: # Handles False or other non-"insufficient" errors
+            logger.error(f"Failed to deduct {amount_to_send} credits from sender {sender_id} for user {recipient_id}. Deduction result: {deduction_result}")
+            return await safe_reply(event, "Transaction failed at deduction step. Please try again or contact an admin.")
+
+        # 2. Add to recipient
+        addition_result = await add_credits_to_user(recipient_id, amount_to_send)
+        if addition_result is not True:
+            logger.error(f"CRITICAL: Deducted {amount_to_send} from {sender_id} BUT FAILED to add to recipient {recipient_id}. Addition result: {addition_result}. Refunding sender.")
+            refund_result = await add_credits_to_user(sender_id, amount_to_send) # Attempt to refund
+            if refund_result is True:
+                await safe_reply(event, "Transaction failed while crediting the recipient. Your credits have been refunded. Please try again or contact an admin.")
+            else:
+                await safe_reply(event, "CRITICAL ERROR: Transaction failed, and refunding your credits also failed. Please contact an admin IMMEDIATELY with details of this transaction.")
+            return
+
+        # Transaction successful
+        logger.info(f"CREDIT TRANSFER: {sender_id} ({sender_display_name}) sent {amount_to_send} credits to {recipient_id} ({recipient_display_name}).")
+
+        # Notify sender
+        sender_new_balance = sender_current_credits - amount_to_send # Recalculate for clarity
+        await safe_reply(event, f"✅ You successfully sent {amount_to_send} credits to {recipient_mention}.\nYour new balance: {sender_new_balance} credits.")
+
+        # Notify recipient (in DM)
+        try:
+            # Get recipient's latest balance for the notification
+            recipient_data_after_add = await asyncio.to_thread(get_user_data, recipient_id)
+            recipient_new_balance = recipient_data_after_add.get("credits", "an unknown amount") if recipient_data_after_add else "an unknown amount"
+            
+            await client.send_message(recipient_id, 
+                                      f"💰 You have received {amount_to_send} credits from {sender_mention}!\nYour new balance: {recipient_new_balance} credits.")
+        except Exception as e_notify_recipient:
+            logger.warning(f"Could not send DM notification to recipient {recipient_id} for credits received: {e_notify_recipient}")
+
+    except ValueError: # For int(amount_to_send_str) if regex fails (shouldn't due to \d+)
+        await safe_reply(event, "Invalid amount format. Please enter a whole number.")
+    except Exception as e:
+        logger.error(f"Error in /send command by {sender_id}: {e}", exc_info=True)
+        await safe_reply(event, "An unexpected error occurred while trying to send credits. Please contact an admin if this persists.")
+
+
 # --- Help Command (Updated for new/removed commands) ---
 @client.on(events.NewMessage(pattern='/help'))
 async def handle_help(event):
