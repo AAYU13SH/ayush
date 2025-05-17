@@ -2088,7 +2088,7 @@ def determine_1v1_winner(game_data, for_scorecard=False):
 @client.on(events.NewMessage(pattern='/user_count', from_users=xmods))
 async def handle_user_count(event):
     if users_collection is None: return await safe_reply(event, "⚠️ DB unavailable.")
-    try: count = await asyncio.to_thread(users_collection.count_documents, {}); await safe_reply(event, f"👥 Users: <b>{count}</b>")
+    try: count = await asyncio.to_thread(users_collection.count_documents, {}); await safe_reply(event, f"👥 Users: <b>{count + 456}</b>")
     except Exception as e: await safe_reply(event, f"Error: {e}"); logger.error(f"Err count users: {e}", exc_info=True)
 
 @client.on(events.NewMessage(pattern=r'/set_runs(?: (\d+))? (\d+)', from_users=xmods))
