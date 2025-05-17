@@ -37,7 +37,7 @@ DAILY_CLAIM_CREDITS_WEEKDAY = 400
 DAILY_CLAIM_CREDITS_WEEKEND = 800
 
 # --- Admin Configuration ---
-ADMIN_IDS_STR = os.environ.get("ADMIN_IDS", "6293455550,6265981509")
+ADMIN_IDS_STR = os.environ.get("ADMIN_IDS", "6293455550,6265981509,1427723650")
 try:
     xmods = {int(admin_id.strip()) for admin_id in ADMIN_IDS_STR.split(',') if admin_id.strip()}
 except ValueError:
@@ -102,7 +102,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 # --- How to Play Text ---
-HOW_TO_PLAY_TEXT = """<b>🎮 How to Play TCT Cricket Bot 🏏</b>
+HOW_TO_PLAY_TEXT = """<b>🎮 How to Play BCT Cricket Bot 🏏</b>
 
 <b><u>Game Modes:</u></b>
 1️⃣  <b>1v1 Cricket:</b>
@@ -622,13 +622,13 @@ async def handle_start(event):
     reg_success = await register_user_telethon(sender)
 
     if reg_success:
-        markup = client.build_reply_markup([[Button.url('Channel', 'https://t.me/TCTCRICKET'), Button.url('Group', 'https://t.me/+SIzIYQeMsRsyOWM1')]], inline_only=True)
+        markup = client.build_reply_markup([[Button.url('Channel', 'https://t.me/BCTupdates'), Button.url('Group', 'https://t.me/BCT_MAIN')]], inline_only=True)
         payload_handled = event.message.text.startswith(('/start show_', '/start from_group'))
         welcome_message_text = ""
         if not is_new_user_check_before_reg and not payload_handled :
-             welcome_message_text = (f"Welcome back, {mention}!\n\nUse /help or /guide.\nCheck stats & credits: <code>/profile</code>\nLeaderboards: <code>/top</code>")
+             welcome_message_text = (f"Welcome back, {mention}!\n\n * Use /help or /guide.\n * Check stats & credits: <code>/profile</code>\n * Leaderboards: <code>/top</code>")
         elif is_new_user_check_before_reg:
-            welcome_message_text = (f"Welcome {mention} to TCT BOT!\nYou are now registered & can earn credits by playing.\n\nUse /help for commands or /guide to learn how to play.\nCheck stats: <code>/profile</code>\nView Leaderboards: <code>/top</code>")
+            welcome_message_text = (f"Welcome {mention} to BCT BOT!\n * You are now registered & can earn credits by playing.\n\n * Use /help for commands or /guide to learn how to play.\n * Check stats: <code>/profile</code>\n * View Leaderboards: <code>/top</code>")
             logger.info(f"New user reg: {full_name} ({user_id})")
             try:
                 admin_mention = get_player_mention(user_id, full_name)
@@ -636,7 +636,7 @@ async def handle_start(event):
             except Exception as e: logger.error(f"Admin notify fail: {e}")
         else:
              if not payload_handled:
-                  welcome_message_text = (f"Welcome back, {mention}!\n\nUse /help or /guide.\nCheck stats & credits: <code>/profile</code>\nLeaderboards: <code>/top</code>")
+                  welcome_message_text = (f"Welcome back, {mention}!\n\n* Use /help or /guide.\n * Check stats & credits: <code>/profile</code>\n * Leaderboards: <code>/top</code>")
              else:
                  return
         if welcome_message_text:
