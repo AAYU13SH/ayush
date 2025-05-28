@@ -37,7 +37,7 @@ DAILY_CLAIM_CREDITS_WEEKDAY = 400
 DAILY_CLAIM_CREDITS_WEEKEND = 800
 
 # --- Admin Configuration ---
-ADMIN_IDS_STR = os.environ.get("ADMIN_IDS", "6293455550,6265981509,1427723650")
+ADMIN_IDS_STR = os.environ.get("ADMIN_IDS", "6293455550,6265981509,1427723650,6020886539")
 try:
     xmods = {int(admin_id.strip()) for admin_id in ADMIN_IDS_STR.split(',') if admin_id.strip()}
 except ValueError:
